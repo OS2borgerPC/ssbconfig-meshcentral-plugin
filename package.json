@@ -1,0 +1,9 @@
+{
+  "name": "meshcentral-ssbconfig",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MeshCentral plugin to edit Sikker Selvbetjening config and commit to GitHub",
+  "dependencies": {
+    "yaml": "^2.5.0"
+  }
+}
