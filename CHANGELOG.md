@@ -5,7 +5,7 @@
 ### Added
 
 - Initial scaffold for MeshCentral plugin `ssbconfig`
-- Schema-driven admin form using JSON Forms
+- Schema-driven admin form using RJSF
 - Save-only validation flow
 - GitHub-backed persistence for config and assets
 - Domain mapping support (config domains -> MeshCentral domains)

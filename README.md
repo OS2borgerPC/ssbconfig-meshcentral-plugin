@@ -11,8 +11,7 @@ MeshCentral plugin scaffold for editing a schema-governed config file and commit
   - repo: `os2borgerpc/sikker-selvbetjening`
   - paths:
     - `schemas/system_files/usr/share/sikker-selvbetjening/schemas/schema.json`
-    - `schemas/system_files/usr/share/sikker-selvbetjening/schemas/uischema.json`
-- Renders a form from JSON Schema/UI Schema via JSON Forms.
+- Renders a form from JSON Schema via RJSF.
 - Does not validate while editing.
 - Validates only when Save is pressed.
 - Maps config domains to MeshCentral domains on save.
@@ -24,7 +23,7 @@ MeshCentral plugin scaffold for editing a schema-governed config file and commit
 
 - `config.json` - MeshCentral plugin manifest
 - `ssbconfig.js` - plugin backend + GitHub commit logic
-- `views/admin.handlebars` - admin UI (JSON Forms + save flow)
+- `views/admin.handlebars` - admin UI shell for the RJSF bundle
 
 ## Setup
 
@@ -47,7 +46,6 @@ Example MeshCentral settings snippet:
         "schemaRepoOwner": "os2borgerpc",
         "schemaRepoName": "sikker-selvbetjening",
         "schemaPath": "schemas/system_files/usr/share/sikker-selvbetjening/schemas/schema.json",
-        "uiSchemaPath": "schemas/system_files/usr/share/sikker-selvbetjening/schemas/uischema.json",
         "targetBranch": "main"
       }
     }

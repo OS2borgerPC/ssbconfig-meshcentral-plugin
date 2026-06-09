@@ -1,5 +1,6 @@
 "use strict";
 
+const fs = require("fs");
 const https = require("https");
 const path = require("path");
 
@@ -21,6 +22,26 @@ module.exports.ssbconfig = function (parent) {
     obj.debug("plugin:ssbconfig", "starting plugin");
   };
 
+  obj.handleAdminPostReq = async function (req, res, user) {
+    if (!user || !user.siteadmin) {
+      res.status(403).send("Forbidden");
+      return;
+    }
+
+    try {
+      if (req.query.api === "save") {
+        const body = await readJsonBody(req);
+        const result = await saveAllChanges(body, user, req);
+        sendJson(res, 200, result);
+        return;
+      }
+      res.sendStatus(404);
+    } catch (error) {
+      obj.debug("plugin:ssbconfig", "handleAdminPostReq error", error);
+      sendJson(res, 500, { error: error.message || "Unexpected error" });
+    }
+  };
+
   obj.handleAdminReq = async function (req, res, user) {
     if (!user || !user.siteadmin) {
       res.status(403).send("Forbidden");
@@ -28,22 +49,33 @@ module.exports.ssbconfig = function (parent) {
     }
 
     try {
+      if (req.query.api === "asset") {
+        const fileName = String(req.query.file || "");
+        if (fileName !== "admin.bundle.js") {
+          res.sendStatus(404);
+          return;
+        }
+        const filePath = path.join(obj.VIEWS, fileName);
+        if (!fs.existsSync(filePath)) {
+          sendJson(res, 500, {
+            error:
+              "UI bundle not found. Run 'npm install' and 'npm run build:ui' in the plugin folder."
+          });
+          return;
+        }
+        res.setHeader("Content-Type", "application/javascript; charset=utf-8");
+        res.send(fs.readFileSync(filePath, "utf8"));
+        return;
+      }
+
       if (req.query.api === "bootstrap") {
-        const payload = await getBootstrapPayload();
+        const payload = await getBootstrapPayload(req, user);
         sendJson(res, 200, payload);
         return;
       }
 
-      if (req.method === "POST" && req.query.api === "save") {
-        const body = await readJsonBody(req);
-        const result = await saveAllChanges(body, user);
-        sendJson(res, 200, result);
-        return;
-      }
-
       const vars = {
-        pluginName: "Sikker Selvbetjening Config Editor",
-        meshDomainsJson: JSON.stringify(getMeshDomainNames())
+        pluginName: "Sikker Selvbetjening Config Editor"
       };
       res.render(obj.VIEWS + "admin", vars);
     } catch (error) {
@@ -58,16 +90,11 @@ module.exports.ssbconfig = function (parent) {
   }
 
   function getPluginSettings() {
-    const fromConfig =
-      (obj.meshServer &&
-        obj.meshServer.config &&
-        obj.meshServer.config.settings &&
-        obj.meshServer.config.settings.plugins &&
-        obj.meshServer.config.settings.plugins.ssbconfig) ||
-      {};
+    const fromConfig = getPluginConfig();
+    const githubToken = (fromConfig.githubToken || process.env.GITHUB_TOKEN || "").trim() || null;
 
     return {
-      githubToken: fromConfig.githubToken || process.env.GITHUB_TOKEN,
+      githubToken,
       configRepoOwner: fromConfig.configRepoOwner || process.env.GITHUB_OWNER || "os2borgerpc",
       configRepoName: fromConfig.configRepoName || process.env.GITHUB_REPO || "sikker-selvbetjening-config",
       configFilePath: fromConfig.configFilePath || "config/config.json",
@@ -76,16 +103,87 @@ module.exports.ssbconfig = function (parent) {
       schemaPath:
         fromConfig.schemaPath ||
         "schemas/system_files/usr/share/sikker-selvbetjening/schemas/schema.json",
-      uiSchemaPath:
-        fromConfig.uiSchemaPath ||
-        "schemas/system_files/usr/share/sikker-selvbetjening/schemas/uischema.json",
       targetBranch: fromConfig.targetBranch || null
     };
   }
 
-  async function getBootstrapPayload() {
+  function getPluginConfig() {
+    const runtimeConfig =
+      obj.meshServer &&
+      obj.meshServer.config &&
+      obj.meshServer.config.settings &&
+      obj.meshServer.config.settings.plugins &&
+      obj.meshServer.config.settings.plugins.ssbconfig;
+
+    let diskConfig = null;
+
+    try {
+      const configPath = path.resolve(__dirname, "..", "..", "config.json");
+      if (fs.existsSync(configPath)) {
+        const parsed = JSON.parse(fs.readFileSync(configPath, "utf8"));
+        diskConfig =
+          parsed &&
+          parsed.settings &&
+          parsed.settings.plugins &&
+          parsed.settings.plugins.ssbconfig;
+      }
+    } catch (error) {
+      // Ignore config file read issues and fall back to empty config.
+    }
+
+    return Object.assign(
+      {},
+      (diskConfig && typeof diskConfig === "object") ? diskConfig : {},
+      (runtimeConfig && typeof runtimeConfig === "object") ? runtimeConfig : {}
+    );
+  }
+
+  function resolveRequestDomainId(req, user) {
+    if (user && typeof user.domain === "string") {
+      return user.domain;
+    }
+
+    const domains = (obj.meshServer && obj.meshServer.config && obj.meshServer.config.domains) || {};
+    const knownDomains = Object.keys(domains);
+    if (!req || typeof req.url !== "string") {
+      return "";
+    }
+
+    const pathOnly = req.url.split("?")[0] || "";
+    const parts = pathOnly.split("/").filter((x) => x.length > 0);
+    if (parts.length > 1 && parts[1] === "pluginadmin.ashx" && knownDomains.indexOf(parts[0]) >= 0) {
+      return parts[0];
+    }
+
+    return "";
+  }
+
+  function getDomainSchema(schema) {
+    if (!schema || typeof schema !== "object") {
+      return { type: "object", properties: {} };
+    }
+
+    const domainsSchema = schema.properties && schema.properties.domains;
+    if (domainsSchema && typeof domainsSchema === "object") {
+      if (domainsSchema.additionalProperties && typeof domainsSchema.additionalProperties === "object") {
+        return domainsSchema.additionalProperties;
+      }
+
+      if (domainsSchema.patternProperties && typeof domainsSchema.patternProperties === "object") {
+        const keys = Object.keys(domainsSchema.patternProperties);
+        if (keys.length > 0) {
+          return domainsSchema.patternProperties[keys[0]];
+        }
+      }
+    }
+
+    return schema;
+  }
+
+  async function getBootstrapPayload(req, user) {
     const settings = getPluginSettings();
     ensureSettings(settings);
+    const domainId = resolveRequestDomainId(req, user);
 
     const configContent = await githubGetFileContent(
       settings,
@@ -101,34 +199,37 @@ module.exports.ssbconfig = function (parent) {
       settings.schemaPath
     );
 
-    const uiSchemaContent = await githubGetFileContent(
-      settings,
-      settings.schemaRepoOwner,
-      settings.schemaRepoName,
-      settings.uiSchemaPath
-    );
+    const fullConfigData = parseConfigByPath(settings.configFilePath, configContent.content);
+    const fullSchema = JSON.parse(schemaContent.content);
+    const scopedConfigData =
+      fullConfigData &&
+      fullConfigData.domains &&
+      typeof fullConfigData.domains === "object" &&
+      !Array.isArray(fullConfigData.domains) &&
+      Object.prototype.hasOwnProperty.call(fullConfigData.domains, domainId)
+        ? fullConfigData.domains[domainId]
+        : {};
 
     return {
-      configData: parseConfigByPath(settings.configFilePath, configContent.content),
-      schema: JSON.parse(schemaContent.content),
-      uischema: JSON.parse(uiSchemaContent.content),
+      configData: scopedConfigData,
+      schema: getDomainSchema(fullSchema),
       configRepo: {
         owner: settings.configRepoOwner,
         repo: settings.configRepoName,
         filePath: settings.configFilePath,
         branch: configContent.branch
       },
-      meshDomains: getMeshDomainNames(),
+      domainId,
       configFileSha: configContent.sha
     };
   }
 
-  async function saveAllChanges(body, user) {
+  async function saveAllChanges(body, user, req) {
     const settings = getPluginSettings();
     ensureSettings(settings);
+    const domainId = resolveRequestDomainId(req, user);
 
     const configData = body && body.configData;
-    const domainMap = (body && body.domainMap) || {};
     const assets = (body && body.assets) || [];
 
     if (!configData || typeof configData !== "object") {
@@ -139,8 +240,17 @@ module.exports.ssbconfig = function (parent) {
       throw new Error("assets must be an array");
     }
 
-    const meshDomains = getMeshDomainNames();
-    const transformedConfig = applyDomainMap(configData, domainMap, meshDomains);
+    const currentConfigContent = await githubGetFileContent(
+      settings,
+      settings.configRepoOwner,
+      settings.configRepoName,
+      settings.configFilePath
+    );
+    const transformedConfig = parseConfigByPath(settings.configFilePath, currentConfigContent.content);
+    if (!transformedConfig.domains || typeof transformedConfig.domains !== "object" || Array.isArray(transformedConfig.domains)) {
+      transformedConfig.domains = {};
+    }
+    transformedConfig.domains[domainId] = configData;
     const configContent = stringifyConfigByPath(settings.configFilePath, transformedConfig);
 
     const defaultBranch = await githubGetDefaultBranch(
@@ -153,17 +263,6 @@ module.exports.ssbconfig = function (parent) {
     const commitMessage =
       (body && body.commitMessage) ||
       "Update config and assets from MeshCentral plugin";
-
-    const assetDomain =
-      body && typeof body.assetDomain === "string" ? body.assetDomain.trim() : "";
-
-    if (assets.length > 0 && !assetDomain) {
-      throw new Error("assetDomain is required when uploading assets");
-    }
-
-    if (assetDomain && meshDomains.indexOf(assetDomain) === -1) {
-      throw new Error("assetDomain must be a valid MeshCentral domain");
-    }
 
     const fileChanges = [
       {
@@ -178,7 +277,7 @@ module.exports.ssbconfig = function (parent) {
       }
 
       const safeAssetPath = sanitizeAssetPath(asset.path);
-      const repoAssetPath = joinRepoPath(joinRepoPath("assets", assetDomain), safeAssetPath);
+      const repoAssetPath = joinRepoPath(joinRepoPath("assets", domainId), safeAssetPath);
       const assetUtf8 = Buffer.from(asset.contentBase64, "base64").toString("base64");
       fileChanges.push({
         path: repoAssetPath,
@@ -203,35 +302,9 @@ module.exports.ssbconfig = function (parent) {
       ok: true,
       commitSha: commitResult.commitSha,
       branch,
+      domainId,
       changedFiles: fileChanges.map((f) => f.path)
     };
-  }
-
-  function applyDomainMap(configData, domainMap, meshDomains) {
-    const clone = JSON.parse(JSON.stringify(configData));
-
-    if (!clone.domains || typeof clone.domains !== "object" || Array.isArray(clone.domains)) {
-      return clone;
-    }
-
-    const sourceDomains = clone.domains;
-    const mappedDomains = {};
-
-    for (const meshDomain of meshDomains) {
-      const sourceDomain = domainMap[meshDomain];
-      if (sourceDomain && Object.prototype.hasOwnProperty.call(sourceDomains, sourceDomain)) {
-        mappedDomains[meshDomain] = sourceDomains[sourceDomain];
-      }
-    }
-
-    for (const key of Object.keys(sourceDomains)) {
-      if (!Object.prototype.hasOwnProperty.call(mappedDomains, key)) {
-        mappedDomains[key] = sourceDomains[key];
-      }
-    }
-
-    clone.domains = mappedDomains;
-    return clone;
   }
 
   function parseConfigByPath(configPath, content) {
@@ -283,7 +356,7 @@ module.exports.ssbconfig = function (parent) {
 
   function ensureSettings(settings) {
     if (!settings.githubToken) {
-      throw new Error("Missing GitHub token. Set plugins.ssbconfig.githubToken or GITHUB_TOKEN env var.");
+      throw new Error("Missing GitHub token. Set settings.plugins.ssbconfig.githubToken in MeshCentral config.json or GITHUB_TOKEN env var.");
     }
   }
 
