@@ -166,19 +166,191 @@ module.exports.ssbconfig = function (parent) {
 
     const domainsSchema = schema.properties && schema.properties.domains;
     if (domainsSchema && typeof domainsSchema === "object") {
+      if (
+        domainsSchema.type === "array" &&
+        domainsSchema.items &&
+        typeof domainsSchema.items === "object"
+      ) {
+        const itemSchema = resolveSchemaRef(schema, domainsSchema.items);
+        if (itemSchema && typeof itemSchema === "object") {
+          return itemSchema;
+        }
+      }
+
       if (domainsSchema.additionalProperties && typeof domainsSchema.additionalProperties === "object") {
-        return domainsSchema.additionalProperties;
+        return resolveSchemaRef(schema, domainsSchema.additionalProperties);
       }
 
       if (domainsSchema.patternProperties && typeof domainsSchema.patternProperties === "object") {
         const keys = Object.keys(domainsSchema.patternProperties);
         if (keys.length > 0) {
-          return domainsSchema.patternProperties[keys[0]];
+          return resolveSchemaRef(schema, domainsSchema.patternProperties[keys[0]]);
         }
       }
     }
 
     return schema;
+  }
+
+  function resolveSchemaRef(rootSchema, schemaNode) {
+    if (!schemaNode || typeof schemaNode !== "object") {
+      return schemaNode;
+    }
+
+    if (typeof schemaNode.$ref === "string") {
+      const resolved = resolveJsonPointer(rootSchema, schemaNode.$ref);
+      if (resolved && typeof resolved === "object") {
+        const merged = Object.assign({}, resolved, schemaNode);
+        delete merged.$ref;
+        return merged;
+      }
+    }
+
+    return schemaNode;
+  }
+
+  function resolveJsonPointer(root, ref) {
+    if (!ref || typeof ref !== "string" || !ref.startsWith("#/")) {
+      return null;
+    }
+
+    const tokens = ref
+      .slice(2)
+      .split("/")
+      .map((token) => token.replace(/~1/g, "/").replace(/~0/g, "~"));
+
+    let current = root;
+    for (const token of tokens) {
+      if (!current || typeof current !== "object" || !Object.prototype.hasOwnProperty.call(current, token)) {
+        return null;
+      }
+      current = current[token];
+    }
+
+    return current;
+  }
+
+  function getPoliciesOnlySchema(fullSchema, domainSchema) {
+    const base =
+      domainSchema && typeof domainSchema === "object"
+        ? domainSchema
+        : { type: "object", properties: {} };
+
+    const rawPoliciesSchema =
+      base.properties &&
+      typeof base.properties === "object" &&
+      Object.prototype.hasOwnProperty.call(base.properties, "policies")
+        ? base.properties.policies
+        : { type: "array", items: {} };
+
+    const policiesSchema = resolveSchemaRef(fullSchema, rawPoliciesSchema);
+
+    const projected = {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        policies: policiesSchema
+      },
+      required: ["policies"]
+    };
+
+    if (fullSchema && fullSchema.$defs && typeof fullSchema.$defs === "object") {
+      projected.$defs = fullSchema.$defs;
+    }
+
+    if (fullSchema && fullSchema.definitions && typeof fullSchema.definitions === "object") {
+      projected.definitions = fullSchema.definitions;
+    }
+
+    return projected;
+  }
+
+  function getPoliciesOnlyData(domainConfig) {
+    if (domainConfig && typeof domainConfig === "object" && !Array.isArray(domainConfig)) {
+      if (Array.isArray(domainConfig.policies) && domainConfig.policies.length > 0) {
+        return { policies: domainConfig.policies };
+      }
+      return { policies: [{}] };
+    }
+
+    if (Array.isArray(domainConfig) && domainConfig.length > 0) {
+      return { policies: domainConfig };
+    }
+
+    return { policies: [{}] };
+  }
+
+  function getDomainConfigEntry(fullConfigData, domainId) {
+    if (!fullConfigData || typeof fullConfigData !== "object") {
+      return {};
+    }
+
+    const domains = fullConfigData.domains;
+    if (!domains || typeof domains !== "object") {
+      return {};
+    }
+
+    if (Array.isArray(domains)) {
+      const entry = domains.find(
+        (item) =>
+          item &&
+          typeof item === "object" &&
+          !Array.isArray(item) &&
+          Object.prototype.hasOwnProperty.call(item, "domain") &&
+          item.domain === domainId
+      );
+      return entry && typeof entry === "object" ? entry : {};
+    }
+
+    if (Object.prototype.hasOwnProperty.call(domains, domainId)) {
+      const entry = domains[domainId];
+      return entry && typeof entry === "object" && !Array.isArray(entry) ? entry : {};
+    }
+
+    return {};
+  }
+
+  function setDomainPolicies(fullConfigData, domainId, policies) {
+    if (!fullConfigData || typeof fullConfigData !== "object") {
+      throw new Error("Config root must be an object");
+    }
+
+    if (!fullConfigData.domains || typeof fullConfigData.domains !== "object") {
+      fullConfigData.domains = {};
+    }
+
+    if (Array.isArray(fullConfigData.domains)) {
+      const index = fullConfigData.domains.findIndex(
+        (item) =>
+          item &&
+          typeof item === "object" &&
+          !Array.isArray(item) &&
+          Object.prototype.hasOwnProperty.call(item, "domain") &&
+          item.domain === domainId
+      );
+
+      if (index >= 0) {
+        const existing =
+          fullConfigData.domains[index] &&
+          typeof fullConfigData.domains[index] === "object" &&
+          !Array.isArray(fullConfigData.domains[index])
+            ? fullConfigData.domains[index]
+            : {};
+        fullConfigData.domains[index] = Object.assign({}, existing, { policies });
+      } else {
+        fullConfigData.domains.push({ domain: domainId, policies });
+      }
+      return;
+    }
+
+    const existingDomainConfig =
+      fullConfigData.domains[domainId] &&
+      typeof fullConfigData.domains[domainId] === "object" &&
+      !Array.isArray(fullConfigData.domains[domainId])
+        ? fullConfigData.domains[domainId]
+        : {};
+
+    fullConfigData.domains[domainId] = Object.assign({}, existingDomainConfig, { policies });
   }
 
   async function getBootstrapPayload(req, user) {
@@ -202,18 +374,12 @@ module.exports.ssbconfig = function (parent) {
 
     const fullConfigData = parseConfigByPath(settings.configFilePath, configContent.content);
     const fullSchema = JSON.parse(schemaContent.content);
-    const scopedConfigData =
-      fullConfigData &&
-      fullConfigData.domains &&
-      typeof fullConfigData.domains === "object" &&
-      !Array.isArray(fullConfigData.domains) &&
-      Object.prototype.hasOwnProperty.call(fullConfigData.domains, domainId)
-        ? fullConfigData.domains[domainId]
-        : {};
+    const domainSchema = getDomainSchema(fullSchema);
+    const scopedConfigData = getDomainConfigEntry(fullConfigData, domainId);
 
     return {
-      configData: scopedConfigData,
-      schema: getDomainSchema(fullSchema),
+      configData: getPoliciesOnlyData(scopedConfigData),
+      schema: getPoliciesOnlySchema(fullSchema, domainSchema),
       configRepo: {
         owner: settings.configRepoOwner,
         repo: settings.configRepoName,
@@ -233,8 +399,12 @@ module.exports.ssbconfig = function (parent) {
     const configData = body && body.configData;
     const assets = (body && body.assets) || [];
 
-    if (!configData || typeof configData !== "object") {
+    if (!configData || typeof configData !== "object" || Array.isArray(configData)) {
       throw new Error("configData must be an object");
+    }
+
+    if (!Object.prototype.hasOwnProperty.call(configData, "policies")) {
+      throw new Error("configData must include a policies field");
     }
 
     if (!Array.isArray(assets)) {
@@ -248,10 +418,7 @@ module.exports.ssbconfig = function (parent) {
       settings.configFilePath
     );
     const transformedConfig = parseConfigByPath(settings.configFilePath, currentConfigContent.content);
-    if (!transformedConfig.domains || typeof transformedConfig.domains !== "object" || Array.isArray(transformedConfig.domains)) {
-      transformedConfig.domains = {};
-    }
-    transformedConfig.domains[domainId] = configData;
+    setDomainPolicies(transformedConfig, domainId, configData.policies);
     const configContent = stringifyConfigByPath(settings.configFilePath, transformedConfig);
 
     const defaultBranch = await githubGetDefaultBranch(
