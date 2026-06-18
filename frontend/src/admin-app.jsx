@@ -31,8 +31,15 @@ function toBase64(buffer) {
   return btoa(binary);
 }
 
+function buildPluginUrl(queryString) {
+  return `./pluginadmin.ashx${queryString}`;
+}
+
 function App() {
   const submitButtonRef = useRef(null);
+  const injectedDomainId = typeof window !== 'undefined' && typeof window.__SSBCONFIG_DOMAIN_ID__ === 'string'
+    ? window.__SSBCONFIG_DOMAIN_ID__
+    : '';
   const [status, setStatus] = useState({ type: 'info', message: 'Loading config from GitHub...' });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -41,7 +48,7 @@ function App() {
   const [schema, setSchema] = useState(null);
   const [data, setData] = useState({});
 
-  const [domainId, setDomainId] = useState('');
+  const [domainId, setDomainId] = useState(injectedDomainId);
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [commitMessage, setCommitMessage] = useState('Update config and assets from MeshCentral plugin');
 
@@ -54,7 +61,7 @@ function App() {
     setLoading(true);
     setStatus({ type: 'info', message: 'Loading config from GitHub...' });
     try {
-      const response = await fetch('/pluginadmin.ashx?pin=ssbconfig&api=bootstrap&user=1');
+      const response = await fetch(buildPluginUrl('?pin=ssbconfig&api=bootstrap&user=1'));
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || 'Bootstrap failed');
 
@@ -62,7 +69,7 @@ function App() {
 
       setSchema(payload.schema || { type: 'object', properties: {} });
       setData(nextData);
-      setDomainId(typeof payload.domainId === 'string' ? payload.domainId : '');
+      setDomainId(typeof payload.domainId === 'string' ? payload.domainId : injectedDomainId);
       setSelectedFiles([]);
 
       if (payload.configRepo) {
@@ -71,8 +78,9 @@ function App() {
         setRepoInfo('');
       }
 
-      if (typeof payload.domainId === 'string' && payload.domainId.length > 0) {
-        setStatus({ type: 'success', message: `Loaded config for domain ${payload.domainId}.` });
+      const activeDomain = typeof payload.domainId === 'string' && payload.domainId.length > 0 ? payload.domainId : injectedDomainId;
+      if (activeDomain.length > 0) {
+        setStatus({ type: 'success', message: `Loaded config for domain ${activeDomain}.` });
       } else {
         setStatus({ type: 'success', message: 'Loaded config for default domain.' });
       }
@@ -93,7 +101,7 @@ function App() {
     setStatus({ type: 'info', message: 'Committing changes to GitHub...' });
 
     try {
-      const response = await fetch('/pluginadmin.ashx?pin=ssbconfig&api=save&user=1', {
+      const response = await fetch(buildPluginUrl('?pin=ssbconfig&api=save&user=1'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -109,7 +117,7 @@ function App() {
       setData(nextData);
       setStatus({
         type: 'success',
-        message: `Committed ${payload.changedFiles ? payload.changedFiles.length : 0} file(s) for domain ${payload.domainId || domainId} on ${payload.branch}. Commit: ${payload.commitSha}`
+        message: `Committed ${payload.changedFiles ? payload.changedFiles.length : 0} file(s) for domain ${payload.domainId || domainId || injectedDomainId} on ${payload.branch}. Commit: ${payload.commitSha}`
       });
       setSelectedFiles([]);
     } catch (err) {

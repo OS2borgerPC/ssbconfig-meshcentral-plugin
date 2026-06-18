@@ -75,7 +75,8 @@ module.exports.ssbconfig = function (parent) {
       }
 
       const vars = {
-        pluginName: "Sikker Selvbetjening Config Editor"
+        pluginName: "Sikker Selvbetjening Config Editor",
+        domainId: resolveRequestDomainId(req, user)
       };
       res.render(obj.VIEWS + "admin", vars);
     } catch (error) {
@@ -139,20 +140,20 @@ module.exports.ssbconfig = function (parent) {
   }
 
   function resolveRequestDomainId(req, user) {
-    if (user && typeof user.domain === "string") {
-      return user.domain;
-    }
-
     const domains = (obj.meshServer && obj.meshServer.config && obj.meshServer.config.domains) || {};
     const knownDomains = Object.keys(domains);
     if (!req || typeof req.url !== "string") {
-      return "";
+      return (user && typeof user.domain === "string") ? user.domain : "";
     }
 
     const pathOnly = req.url.split("?")[0] || "";
     const parts = pathOnly.split("/").filter((x) => x.length > 0);
     if (parts.length > 1 && parts[1] === "pluginadmin.ashx" && knownDomains.indexOf(parts[0]) >= 0) {
       return parts[0];
+    }
+
+    if (user && typeof user.domain === "string") {
+      return user.domain;
     }
 
     return "";
