@@ -471,7 +471,8 @@ module.exports.ssbconfig = function (parent) {
       commitSha: commitResult.commitSha,
       branch,
       domainId,
-      changedFiles: fileChanges.map((f) => f.path)
+      changedFiles: fileChanges.map((f) => f.path),
+      rawConfigContent: configContent
     };
   }
 

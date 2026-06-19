@@ -117,7 +117,8 @@ function App() {
       setData(nextData);
       setStatus({
         type: 'success',
-        message: `Committed ${payload.changedFiles ? payload.changedFiles.length : 0} file(s) for domain ${payload.domainId || domainId || injectedDomainId} on ${payload.branch}. Commit: ${payload.commitSha}`
+        message: `Committed ${payload.changedFiles ? payload.changedFiles.length : 0} file(s) for domain ${payload.domainId || domainId || injectedDomainId} on ${payload.branch}. Commit: ${payload.commitSha}`,
+        rawConfigContent: payload.rawConfigContent || ''
       });
       setSelectedFiles([]);
     } catch (err) {
@@ -184,7 +185,26 @@ function App() {
         </Card>
 
         <Alert severity={status.type === 'error' ? 'error' : status.type === 'success' ? 'success' : 'info'}>
-          {status.message}
+          <Stack spacing={1}>
+            <Typography variant="body2">{status.message}</Typography>
+            {status.rawConfigContent ? (
+              <TextField
+                label="Raw config.yml about to commit"
+                multiline
+                fullWidth
+                minRows={8}
+                maxRows={24}
+                value={status.rawConfigContent}
+                InputProps={{
+                  readOnly: true,
+                  sx: {
+                    fontFamily: 'monospace',
+                    fontSize: 12
+                  }
+                }}
+              />
+            ) : null}
+          </Stack>
         </Alert>
 
         <Card>
