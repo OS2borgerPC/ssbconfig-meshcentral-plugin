@@ -2,7 +2,7 @@
   "name": "Sikker Selvbetjening Config Editor",
   "shortName": "ssbconfig",
   "version": "0.1.0",
-  "author": "Scaffolded by GitHub Copilot",
+  "author": "Agnete Moos",
   "description": "MeshCentral plugin for editing schema-governed config and committing config/assets to GitHub.",
   "hasAdminPanel": true,
   "homepage": "https://github.com/OS2borgerPC/ssbconfig-meshcentral-plugin",
