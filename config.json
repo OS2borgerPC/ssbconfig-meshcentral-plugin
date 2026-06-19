@@ -5,13 +5,13 @@
   "author": "Scaffolded by GitHub Copilot",
   "description": "MeshCentral plugin for editing schema-governed config and committing config/assets to GitHub.",
   "hasAdminPanel": true,
-  "homepage": "https://github.com/os2borgerpc/sikker-selvbetjening",
-  "changelogUrl": "https://raw.githubusercontent.com/os2borgerpc/sikker-selvbetjening-mesh-central/main/CHANGELOG.md",
-  "configUrl": "https://raw.githubusercontent.com/os2borgerpc/sikker-selvbetjening-mesh-central/main/config.json",
-  "downloadUrl": "https://github.com/os2borgerpc/sikker-selvbetjening-mesh-central/archive/refs/heads/main.zip",
+  "homepage": "https://github.com/OS2borgerPC/ssbconfig-meshcentral-plugin",
+  "changelogUrl": "https://raw.githubusercontent.com/OS2borgerPC/ssbconfig-meshcentral-plugin/main/CHANGELOG.md",
+  "configUrl": "https://raw.githubusercontent.com/OS2borgerPC/ssbconfig-meshcentral-plugin/main/config.json",
+  "downloadUrl": "https://github.com/OS2borgerPC/ssbconfig-meshcentral-plugin/archive/refs/heads/main.zip",
   "repository": {
     "type": "git",
-    "url": "https://github.com/os2borgerpc/sikker-selvbetjening-mesh-central.git"
+    "url": "https://github.com/OS2borgerPC/ssbconfig-meshcentral-plugin.git"
   },
   "meshCentralCompat": ">=1.1.0"
 }
