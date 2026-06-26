@@ -535,7 +535,7 @@ module.exports.ssbconfig = function (parent) {
       return [];
     }
 
-    return (validate.errors || []).map(formatAjvError);
+    return (validate.errors || []).map((error) => formatAjvError(error, configData));
   }
 
   function createAjv2020ForGithubSchema(schema) {
@@ -553,21 +553,97 @@ module.exports.ssbconfig = function (parent) {
     return new Ajv2020({ allErrors: true, strict: false, allowUnionTypes: true });
   }
 
-  function formatAjvError(error) {
+  function formatAjvError(error, configData) {
     const instancePath = error && typeof error.instancePath === "string" && error.instancePath.length > 0
       ? error.instancePath
       : "/";
     const keyword = error && typeof error.keyword === "string" ? error.keyword : "validation";
     const message = error && typeof error.message === "string" ? error.message : "invalid value";
     const schemaPath = error && typeof error.schemaPath === "string" ? error.schemaPath : "";
+    const value = getValueAtJsonPointer(configData, instancePath);
+    const valueType = getValueType(value);
+    const valuePreview = getValuePreview(value);
+    const text = `${instancePath}: ${message} (got ${valueType}: ${valuePreview})`;
 
     return {
       path: instancePath,
       keyword,
       message,
       schemaPath,
-      text: `${instancePath}: ${message}`
+      valueType,
+      valuePreview,
+      text
     };
+  }
+
+  function getValueAtJsonPointer(root, pointer) {
+    if (pointer === "/" || pointer === "") {
+      return root;
+    }
+
+    if (!pointer || typeof pointer !== "string" || !pointer.startsWith("/")) {
+      return undefined;
+    }
+
+    const tokens = pointer
+      .slice(1)
+      .split("/")
+      .map((token) => token.replace(/~1/g, "/").replace(/~0/g, "~"));
+
+    let current = root;
+    for (const token of tokens) {
+      if (current == null) {
+        return undefined;
+      }
+
+      if (Array.isArray(current)) {
+        const index = Number(token);
+        if (!Number.isInteger(index) || index < 0 || index >= current.length) {
+          return undefined;
+        }
+        current = current[index];
+        continue;
+      }
+
+      if (typeof current === "object" && Object.prototype.hasOwnProperty.call(current, token)) {
+        current = current[token];
+        continue;
+      }
+
+      return undefined;
+    }
+
+    return current;
+  }
+
+  function getValueType(value) {
+    if (value === null) {
+      return "null";
+    }
+    if (Array.isArray(value)) {
+      return "array";
+    }
+    return typeof value;
+  }
+
+  function getValuePreview(value) {
+    if (value === undefined) {
+      return "undefined";
+    }
+    if (typeof value === "string") {
+      const compact = value.length > 120 ? `${value.slice(0, 120)}...` : value;
+      return JSON.stringify(compact);
+    }
+
+    try {
+      const json = JSON.stringify(value);
+      if (typeof json !== "string") {
+        return String(value);
+      }
+      return json.length > 160 ? `${json.slice(0, 160)}...` : json;
+    } catch (error) {
+      return String(value);
+    }
   }
 
   function parseConfigByPath(configPath, content) {

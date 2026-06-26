@@ -248,23 +248,6 @@ function App() {
         <Alert severity={status.type === 'error' ? 'error' : status.type === 'success' ? 'success' : 'info'}>
           <Stack spacing={1}>
             <Typography variant="body2">{status.message}</Typography>
-            {status.rawConfigContent ? (
-              <TextField
-                label="Raw config.yml about to commit"
-                multiline
-                fullWidth
-                minRows={8}
-                maxRows={24}
-                value={status.rawConfigContent}
-                InputProps={{
-                  readOnly: true,
-                  sx: {
-                    fontFamily: 'monospace',
-                    fontSize: 12
-                  }
-                }}
-              />
-            ) : null}
           </Stack>
         </Alert>
 
@@ -282,7 +265,14 @@ function App() {
         ) : null}
 
         {previewContent ? (
-          <Card>
+          <Card
+            sx={{
+              width: 'calc(100vw - 24px)',
+              maxWidth: 'none',
+              ml: 'calc(50% - 50vw + 12px)',
+              mr: 'calc(50% - 50vw + 12px)'
+            }}
+          >
             <CardContent>
               <TextField
                 label="Raw config.yml preview"
@@ -295,9 +285,16 @@ function App() {
                   readOnly: true,
                   sx: {
                     fontFamily: 'monospace',
-                    fontSize: 12
+                    fontSize: 12,
+                    '& textarea': {
+                      whiteSpace: 'pre',
+                      overflowX: 'auto',
+                      overflowY: 'auto',
+                      wordBreak: 'normal'
+                    }
                   }
                 }}
+                inputProps={{ wrap: 'off' }}
               />
             </CardContent>
           </Card>
