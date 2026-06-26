@@ -3,6 +3,7 @@
 const fs = require("fs");
 const https = require("https");
 const path = require("path");
+const Ajv2020 = require("ajv/dist/2020");
 
 let yaml = null;
 try {
@@ -29,6 +30,13 @@ module.exports.ssbconfig = function (parent) {
     }
 
     try {
+      if (req.query.api === "preview") {
+        const body = await readJsonBody(req);
+        const result = await previewAllChanges(body, user, req);
+        sendJson(res, 200, result);
+        return;
+      }
+
       if (req.query.api === "save") {
         const body = await readJsonBody(req);
         const result = await saveAllChanges(body, user, req);
@@ -98,12 +106,12 @@ module.exports.ssbconfig = function (parent) {
       githubToken,
       configRepoOwner: fromConfig.configRepoOwner || process.env.GITHUB_OWNER || "os2borgerpc",
       configRepoName: fromConfig.configRepoName || process.env.GITHUB_REPO || "sikker-selvbetjening-config",
-      configFilePath: fromConfig.configFilePath || "config/config.json",
+      configFilePath: fromConfig.configFilePath || "config/config.yml",
       schemaRepoOwner: fromConfig.schemaRepoOwner || process.env.SSB_SCHEMA_GITHUB_OWNER || "os2borgerpc",
       schemaRepoName: fromConfig.schemaRepoName || process.env.SSB_SCHEMA_GITHUB_REPO || "sikker-selvbetjening",
       schemaPath:
         fromConfig.schemaPath ||
-        "schemas/system_files/usr/share/sikker-selvbetjening/schemas/schema.json",
+        "features/schemas/system_files/usr/share/sikker-selvbetjening/schemas/schema.json",
       targetBranch: fromConfig.targetBranch || null
     };
   }
@@ -392,6 +400,50 @@ module.exports.ssbconfig = function (parent) {
   }
 
   async function saveAllChanges(body, user, req) {
+    const prepared = await prepareCommitPayload(body, user, req);
+
+    if (prepared.validationErrors.length > 0) {
+      throw new Error(
+        "Config validation failed in backend preview. Fix errors before committing."
+      );
+    }
+
+    const commitResult = await githubCommitFiles(
+      prepared.settings,
+      {
+        owner: prepared.settings.configRepoOwner,
+        repo: prepared.settings.configRepoName,
+        branch: prepared.branch
+      },
+      prepared.fileChanges,
+      prepared.commitMessage,
+      prepared.actorName
+    );
+
+    return {
+      ok: true,
+      commitSha: commitResult.commitSha,
+      branch: prepared.branch,
+      domainId: prepared.domainId,
+      changedFiles: prepared.fileChanges.map((f) => f.path),
+      rawConfigContent: prepared.configContent,
+      validationErrors: []
+    };
+  }
+
+  async function previewAllChanges(body, user, req) {
+    const prepared = await prepareCommitPayload(body, user, req);
+    return {
+      ok: true,
+      domainId: prepared.domainId,
+      branch: prepared.branch,
+      changedFiles: prepared.fileChanges.map((f) => f.path),
+      rawConfigContent: prepared.configContent,
+      validationErrors: prepared.validationErrors
+    };
+  }
+
+  async function prepareCommitPayload(body, user, req) {
     const settings = getPluginSettings();
     ensureSettings(settings);
     const domainId = resolveRequestDomainId(req, user);
@@ -419,6 +471,14 @@ module.exports.ssbconfig = function (parent) {
     );
     const transformedConfig = parseConfigByPath(settings.configFilePath, currentConfigContent.content);
     setDomainPolicies(transformedConfig, domainId, configData.policies);
+    const schemaContent = await githubGetFileContent(
+      settings,
+      settings.schemaRepoOwner,
+      settings.schemaRepoName,
+      settings.schemaPath
+    );
+    const fullSchema = JSON.parse(schemaContent.content);
+    const validationErrors = validateConfigAgainstSchema(transformedConfig, fullSchema);
     const configContent = stringifyConfigByPath(settings.configFilePath, transformedConfig);
 
     const defaultBranch = await githubGetDefaultBranch(
@@ -454,25 +514,59 @@ module.exports.ssbconfig = function (parent) {
       });
     }
 
-    const commitResult = await githubCommitFiles(
-      settings,
-      {
-        owner: settings.configRepoOwner,
-        repo: settings.configRepoName,
-        branch
-      },
-      fileChanges,
-      commitMessage,
-      user && user.name ? user.name : "MeshCentral Admin"
-    );
-
     return {
-      ok: true,
-      commitSha: commitResult.commitSha,
+      settings,
+      configContent,
+      validationErrors,
+      commitMessage,
+      actorName: user && user.name ? user.name : "MeshCentral Admin",
       branch,
       domainId,
-      changedFiles: fileChanges.map((f) => f.path),
-      rawConfigContent: configContent
+      fileChanges
+    };
+  }
+
+  function validateConfigAgainstSchema(configData, schema) {
+    const ajv = createAjv2020ForGithubSchema(schema);
+    const validate = ajv.compile(schema);
+    const valid = validate(configData);
+
+    if (valid) {
+      return [];
+    }
+
+    return (validate.errors || []).map(formatAjvError);
+  }
+
+  function createAjv2020ForGithubSchema(schema) {
+    const schemaUri =
+      schema && typeof schema.$schema === "string"
+        ? String(schema.$schema).toLowerCase()
+        : "";
+
+    if (schemaUri && !schemaUri.includes("2020-12")) {
+      throw new Error(
+        `Unsupported schema dialect '${schema.$schema}'. Expected JSON Schema draft 2020-12.`
+      );
+    }
+
+    return new Ajv2020({ allErrors: true, strict: false, allowUnionTypes: true });
+  }
+
+  function formatAjvError(error) {
+    const instancePath = error && typeof error.instancePath === "string" && error.instancePath.length > 0
+      ? error.instancePath
+      : "/";
+    const keyword = error && typeof error.keyword === "string" ? error.keyword : "validation";
+    const message = error && typeof error.message === "string" ? error.message : "invalid value";
+    const schemaPath = error && typeof error.schemaPath === "string" ? error.schemaPath : "";
+
+    return {
+      path: instancePath,
+      keyword,
+      message,
+      schemaPath,
+      text: `${instancePath}: ${message}`
     };
   }
 

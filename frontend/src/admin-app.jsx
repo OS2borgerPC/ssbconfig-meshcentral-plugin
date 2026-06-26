@@ -35,6 +35,21 @@ function buildPluginUrl(queryString) {
   return `./pluginadmin.ashx${queryString}`;
 }
 
+async function parseApiResponse(response) {
+  const raw = await response.text();
+  if (!raw) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    return {
+      error: raw.length > 600 ? `${raw.slice(0, 600)}...` : raw
+    };
+  }
+}
+
 function App() {
   const submitButtonRef = useRef(null);
   const injectedDomainId = typeof window !== 'undefined' && typeof window.__SSBCONFIG_DOMAIN_ID__ === 'string'
@@ -42,8 +57,11 @@ function App() {
     : '';
   const [status, setStatus] = useState({ type: 'info', message: 'Loading config from GitHub...' });
   const [loading, setLoading] = useState(true);
+  const [previewing, setPreviewing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [repoInfo, setRepoInfo] = useState('');
+  const [previewContent, setPreviewContent] = useState('');
+  const [previewErrors, setPreviewErrors] = useState([]);
 
   const [schema, setSchema] = useState(null);
   const [data, setData] = useState({});
@@ -62,7 +80,7 @@ function App() {
     setStatus({ type: 'info', message: 'Loading config from GitHub...' });
     try {
       const response = await fetch(buildPluginUrl('?pin=ssbconfig&api=bootstrap&user=1'));
-      const payload = await response.json();
+      const payload = await parseApiResponse(response);
       if (!response.ok) throw new Error(payload.error || 'Bootstrap failed');
 
       const nextData = payload.configData || {};
@@ -71,6 +89,8 @@ function App() {
       setData(nextData);
       setDomainId(typeof payload.domainId === 'string' ? payload.domainId : injectedDomainId);
       setSelectedFiles([]);
+      setPreviewContent('');
+      setPreviewErrors([]);
 
       if (payload.configRepo) {
         setRepoInfo(`${payload.configRepo.owner}/${payload.configRepo.repo} @ ${payload.configRepo.branch} :: ${payload.configRepo.filePath}`);
@@ -111,7 +131,7 @@ function App() {
         })
       });
 
-      const payload = await response.json();
+      const payload = await parseApiResponse(response);
       if (!response.ok) throw new Error(payload.error || 'Save failed');
 
       setData(nextData);
@@ -125,6 +145,54 @@ function App() {
       setStatus({ type: 'error', message: err.message || 'Save failed' });
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function previewChanges(nextData) {
+    if (!schema || !nextData || typeof nextData !== 'object') {
+      setStatus({ type: 'error', message: 'No config data to preview.' });
+      return;
+    }
+
+    setPreviewing(true);
+    setStatus({ type: 'info', message: 'Generating backend preview and validating full config.yml...' });
+
+    try {
+      const response = await fetch(buildPluginUrl('?pin=ssbconfig&api=preview&user=1'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          configData: nextData,
+          assets: selectedFiles,
+          commitMessage
+        })
+      });
+
+      const payload = await parseApiResponse(response);
+      if (!response.ok) throw new Error(payload.error || 'Preview failed');
+
+      const errors = Array.isArray(payload.validationErrors) ? payload.validationErrors : [];
+      setData(nextData);
+      setPreviewContent(payload.rawConfigContent || '');
+      setPreviewErrors(errors);
+
+      if (errors.length > 0) {
+        setStatus({
+          type: 'error',
+          message: `Preview generated, but backend validation found ${errors.length} error${errors.length === 1 ? '' : 's'}.`,
+          rawConfigContent: payload.rawConfigContent || ''
+        });
+      } else {
+        setStatus({
+          type: 'success',
+          message: `Preview looks valid for domain ${payload.domainId || domainId || injectedDomainId}. You can now commit to GitHub.`,
+          rawConfigContent: payload.rawConfigContent || ''
+        });
+      }
+    } catch (err) {
+      setStatus({ type: 'error', message: err.message || 'Preview failed' });
+    } finally {
+      setPreviewing(false);
     }
   }
 
@@ -150,14 +218,7 @@ function App() {
       return;
     }
 
-    await persistChanges(data);
-  }
-
-  function onFormError(errors) {
-    setStatus({
-      type: 'error',
-      message: `Fix ${errors.length} validation error${errors.length === 1 ? '' : 's'} before saving.`
-    });
+    await previewChanges(data);
   }
 
   React.useEffect(() => {
@@ -207,6 +268,41 @@ function App() {
           </Stack>
         </Alert>
 
+        {previewErrors.length > 0 ? (
+          <Alert severity="error">
+            <Stack spacing={0.5}>
+              <Typography variant="body2">Validation errors</Typography>
+              {previewErrors.map((err, idx) => (
+                <Typography key={`${idx}-${err.path || 'root'}`} variant="caption" sx={{ fontFamily: 'monospace' }}>
+                  {(err && err.text) || (err && err.message) || 'Unknown validation error'}
+                </Typography>
+              ))}
+            </Stack>
+          </Alert>
+        ) : null}
+
+        {previewContent ? (
+          <Card>
+            <CardContent>
+              <TextField
+                label="Raw config.yml preview"
+                multiline
+                fullWidth
+                minRows={10}
+                maxRows={28}
+                value={previewContent}
+                InputProps={{
+                  readOnly: true,
+                  sx: {
+                    fontFamily: 'monospace',
+                    fontSize: 12
+                  }
+                }}
+              />
+            </CardContent>
+          </Card>
+        ) : null}
+
         <Card>
           <CardContent>
             <Typography variant="h6" sx={{ mb: 2 }}>Config Form</Typography>
@@ -216,14 +312,18 @@ function App() {
                 schema={schema}
                 formData={data}
                 validator={validator}
+                noValidate
                 liveValidate={false}
                 noHtml5Validate
                 showErrorList={false}
-                onChange={({ formData: nextData }) => setData(nextData || {})}
-                onSubmit={({ formData: nextData }) => {
-                  void persistChanges(nextData || {});
+                onChange={({ formData: nextData }) => {
+                  setData(nextData || {});
+                  setPreviewContent('');
+                  setPreviewErrors([]);
                 }}
-                onError={onFormError}
+                onSubmit={({ formData: nextData }) => {
+                  void previewChanges(nextData || {});
+                }}
               >
                 <button
                   ref={submitButtonRef}
@@ -265,10 +365,20 @@ function App() {
               />
 
               <Stack direction="row" spacing={1}>
-                <Button variant="contained" disabled={loading || saving} onClick={onSave}>
+                <Button variant="contained" disabled={loading || previewing || saving} onClick={onSave}>
+                  {previewing ? 'Previewing...' : 'Preview + Validate'}
+                </Button>
+                <Button
+                  variant="contained"
+                  color="success"
+                  disabled={loading || previewing || saving || !previewContent || previewErrors.length > 0}
+                  onClick={() => {
+                    void persistChanges(data);
+                  }}
+                >
                   {saving ? 'Saving...' : 'Commit to GitHub'}
                 </Button>
-                <Button variant="outlined" disabled={loading || saving} onClick={fetchBootstrap}>
+                <Button variant="outlined" disabled={loading || previewing || saving} onClick={fetchBootstrap}>
                   Reload
                 </Button>
               </Stack>
