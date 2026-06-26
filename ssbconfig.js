@@ -386,13 +386,17 @@ module.exports.ssbconfig = function (parent) {
 
     let uiSchema = null;
     if (settings.uiSchemaPath) {
-      const uiSchemaContent = await githubGetFileContent(
-        settings,
-        settings.schemaRepoOwner,
-        settings.schemaRepoName,
-        settings.uiSchemaPath
-      );
-      uiSchema = JSON.parse(uiSchemaContent.content);
+      try {
+        const uiSchemaContent = await githubGetFileContent(
+          settings,
+          settings.schemaRepoOwner,
+          settings.schemaRepoName,
+          settings.uiSchemaPath
+        );
+        uiSchema = JSON.parse(uiSchemaContent.content);
+      } catch (error) {
+        obj.debug("plugin:ssbconfig", "Warning: Failed to load uiSchema, continuing without it", error);
+      }
     }
 
     const fullConfigData = parseConfigByPath(settings.configFilePath, configContent.content);
@@ -465,7 +469,7 @@ module.exports.ssbconfig = function (parent) {
     const domainId = resolveRequestDomainId(req, user);
 
     const configData = body && body.configData;
-    const assets = (body && body.assets) || [];
+    const files = (body && body.files) || [];
 
     if (!configData || typeof configData !== "object" || Array.isArray(configData)) {
       throw new Error("configData must be an object");
@@ -475,8 +479,8 @@ module.exports.ssbconfig = function (parent) {
       throw new Error("configData must include a policies field");
     }
 
-    if (!Array.isArray(assets)) {
-      throw new Error("assets must be an array");
+    if (!Array.isArray(files)) {
+      throw new Error("files must be an array");
     }
 
     const currentConfigContent = await githubGetFileContent(
@@ -526,17 +530,24 @@ module.exports.ssbconfig = function (parent) {
       }
     ];
 
-    for (const asset of assets) {
-      if (!asset || typeof asset.path !== "string" || typeof asset.contentBase64 !== "string") {
-        throw new Error("Each asset must include path and contentBase64");
+    // Add uploaded files to commit
+    for (const file of files) {
+      if (!file || typeof file.path !== "string" || typeof file.content !== "string") {
+        throw new Error("Each file must include path (string) and content (base64 string)");
       }
 
-      const safeAssetPath = sanitizeAssetPath(asset.path);
-      const repoAssetPath = joinRepoPath(joinRepoPath("assets", domainId), safeAssetPath);
-      const assetUtf8 = Buffer.from(asset.contentBase64, "base64").toString("base64");
+      // Replace {domain} placeholder in path
+      const filePath = file.path.replace('{domain}', domainId);
+      
+      // Validate that path is within config/assets/{domain}/
+      const expectedPrefix = `config/assets/${domainId}/`;
+      if (!filePath.startsWith(expectedPrefix)) {
+        throw new Error(`File path must start with ${expectedPrefix}, got: ${filePath}`);
+      }
+
       fileChanges.push({
-        path: repoAssetPath,
-        contentBase64: assetUtf8,
+        path: filePath,
+        contentBase64: file.content,
         isBase64: true
       });
     }
