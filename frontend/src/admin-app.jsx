@@ -64,7 +64,9 @@ function App() {
   const [previewErrors, setPreviewErrors] = useState([]);
 
   const [schema, setSchema] = useState(null);
+  const [uiSchema, setUiSchema] = useState(null);
   const [data, setData] = useState({});
+  const [configFileSha, setConfigFileSha] = useState('');
 
   const [domainId, setDomainId] = useState(injectedDomainId);
   const [selectedFiles, setSelectedFiles] = useState([]);
@@ -86,11 +88,13 @@ function App() {
       const nextData = payload.configData || {};
 
       setSchema(payload.schema || { type: 'object', properties: {} });
+      setUiSchema(payload.uiSchema || null);
       setData(nextData);
       setDomainId(typeof payload.domainId === 'string' ? payload.domainId : injectedDomainId);
       setSelectedFiles([]);
       setPreviewContent('');
       setPreviewErrors([]);
+      setConfigFileSha(typeof payload.configFileSha === 'string' ? payload.configFileSha : '');
 
       if (payload.configRepo) {
         setRepoInfo(`${payload.configRepo.owner}/${payload.configRepo.repo} @ ${payload.configRepo.branch} :: ${payload.configRepo.filePath}`);
@@ -127,11 +131,17 @@ function App() {
         body: JSON.stringify({
           configData: nextData,
           assets: selectedFiles,
-          commitMessage
+          commitMessage,
+          configFileSha
         })
       });
 
       const payload = await parseApiResponse(response);
+      if (response.status === 409 && payload.conflict) {
+        await fetchBootstrap();
+        setStatus({ type: 'warning', message: payload.error || 'Conflict: reloaded latest config from GitHub.' });
+        return;
+      }
       if (!response.ok) throw new Error(payload.error || 'Save failed');
 
       setData(nextData);
@@ -164,11 +174,17 @@ function App() {
         body: JSON.stringify({
           configData: nextData,
           assets: selectedFiles,
-          commitMessage
+          commitMessage,
+          configFileSha
         })
       });
 
       const payload = await parseApiResponse(response);
+      if (response.status === 409 && payload.conflict) {
+        await fetchBootstrap();
+        setStatus({ type: 'warning', message: payload.error || 'Conflict: reloaded latest config from GitHub.' });
+        return;
+      }
       if (!response.ok) throw new Error(payload.error || 'Preview failed');
 
       const errors = Array.isArray(payload.validationErrors) ? payload.validationErrors : [];
@@ -242,10 +258,15 @@ function App() {
             <Typography variant="caption" sx={{ fontFamily: 'monospace', display: 'block', mt: 0.5 }}>
               Active MeshCentral domain: {domainId || '(default)'}
             </Typography>
+            {configFileSha ? (
+              <Typography variant="caption" sx={{ fontFamily: 'monospace', display: 'block', mt: 0.5 }}>
+                Loaded commit SHA: {configFileSha}
+              </Typography>
+            ) : null}
           </CardContent>
         </Card>
 
-        <Alert severity={status.type === 'error' ? 'error' : status.type === 'success' ? 'success' : 'info'}>
+        <Alert severity={status.type === 'error' ? 'error' : status.type === 'success' ? 'success' : status.type === 'warning' ? 'warning' : 'info'}>
           <Stack spacing={1}>
             <Typography variant="body2">{status.message}</Typography>
           </Stack>
@@ -307,6 +328,7 @@ function App() {
               <Form
                 idPrefix="ssbconfig"
                 schema={schema}
+                uiSchema={uiSchema}
                 formData={data}
                 validator={validator}
                 noValidate

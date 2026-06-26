@@ -46,6 +46,10 @@ module.exports.ssbconfig = function (parent) {
       res.sendStatus(404);
     } catch (error) {
       obj.debug("plugin:ssbconfig", "handleAdminPostReq error", error);
+      if (error.isConflict) {
+        sendJson(res, 409, { conflict: true, error: error.message });
+        return;
+      }
       sendJson(res, 500, { error: error.message || "Unexpected error" });
     }
   };
@@ -380,6 +384,17 @@ module.exports.ssbconfig = function (parent) {
       settings.schemaPath
     );
 
+    let uiSchema = null;
+    if (settings.uiSchemaPath) {
+      const uiSchemaContent = await githubGetFileContent(
+        settings,
+        settings.schemaRepoOwner,
+        settings.schemaRepoName,
+        settings.uiSchemaPath
+      );
+      uiSchema = JSON.parse(uiSchemaContent.content);
+    }
+
     const fullConfigData = parseConfigByPath(settings.configFilePath, configContent.content);
     const fullSchema = JSON.parse(schemaContent.content);
     const domainSchema = getDomainSchema(fullSchema);
@@ -388,6 +403,7 @@ module.exports.ssbconfig = function (parent) {
     return {
       configData: getPoliciesOnlyData(scopedConfigData),
       schema: getPoliciesOnlySchema(fullSchema, domainSchema),
+      uiSchema: uiSchema,
       configRepo: {
         owner: settings.configRepoOwner,
         repo: settings.configRepoName,
@@ -469,8 +485,19 @@ module.exports.ssbconfig = function (parent) {
       settings.configRepoName,
       settings.configFilePath
     );
+
+    const clientSha = body && typeof body.configFileSha === "string" ? body.configFileSha : null;
+    if (clientSha && clientSha !== currentConfigContent.sha) {
+      const err = new Error(
+        "The config file was modified on GitHub while you were editing. Your changes have been discarded — the latest version has been reloaded."
+      );
+      err.isConflict = true;
+      throw err;
+    }
+
     const transformedConfig = parseConfigByPath(settings.configFilePath, currentConfigContent.content);
-    setDomainPolicies(transformedConfig, domainId, configData.policies);
+    const sanitizedPolicies = sanitizeForConfig(configData.policies);
+    setDomainPolicies(transformedConfig, domainId, Array.isArray(sanitizedPolicies) ? sanitizedPolicies : []);
     const schemaContent = await githubGetFileContent(
       settings,
       settings.schemaRepoOwner,
@@ -526,6 +553,42 @@ module.exports.ssbconfig = function (parent) {
     };
   }
 
+  // Recursively drops null/undefined/empty-string/empty-object/empty-array values.
+  // This ensures untouched form placeholders are omitted from generated config.
+  function sanitizeForConfig(value) {
+    if (value === null || value === undefined) {
+      return undefined;
+    }
+
+    if (typeof value === "string") {
+      return value.trim().length === 0 ? undefined : value;
+    }
+
+    if (Array.isArray(value)) {
+      const sanitizedItems = [];
+      for (const item of value) {
+        const cleaned = sanitizeForConfig(item);
+        if (cleaned !== undefined) {
+          sanitizedItems.push(cleaned);
+        }
+      }
+      return sanitizedItems.length > 0 ? sanitizedItems : undefined;
+    }
+
+    if (typeof value === "object") {
+      const result = {};
+      for (const key of Object.keys(value)) {
+        const cleaned = sanitizeForConfig(value[key]);
+        if (cleaned !== undefined) {
+          result[key] = cleaned;
+        }
+      }
+      return Object.keys(result).length > 0 ? result : undefined;
+    }
+
+    return value;
+  }
+
   function validateConfigAgainstSchema(configData, schema) {
     const ajv = createAjv2020ForGithubSchema(schema);
     const validate = ajv.compile(schema);
@@ -535,7 +598,7 @@ module.exports.ssbconfig = function (parent) {
       return [];
     }
 
-    return (validate.errors || []).map((error) => formatAjvError(error, configData));
+    return (validate.errors || []).map(formatAjvError);
   }
 
   function createAjv2020ForGithubSchema(schema) {
@@ -553,97 +616,21 @@ module.exports.ssbconfig = function (parent) {
     return new Ajv2020({ allErrors: true, strict: false, allowUnionTypes: true });
   }
 
-  function formatAjvError(error, configData) {
+  function formatAjvError(error) {
     const instancePath = error && typeof error.instancePath === "string" && error.instancePath.length > 0
       ? error.instancePath
       : "/";
     const keyword = error && typeof error.keyword === "string" ? error.keyword : "validation";
     const message = error && typeof error.message === "string" ? error.message : "invalid value";
     const schemaPath = error && typeof error.schemaPath === "string" ? error.schemaPath : "";
-    const value = getValueAtJsonPointer(configData, instancePath);
-    const valueType = getValueType(value);
-    const valuePreview = getValuePreview(value);
-    const text = `${instancePath}: ${message} (got ${valueType}: ${valuePreview})`;
 
     return {
       path: instancePath,
       keyword,
       message,
       schemaPath,
-      valueType,
-      valuePreview,
-      text
+      text: `${instancePath}: ${message}`
     };
-  }
-
-  function getValueAtJsonPointer(root, pointer) {
-    if (pointer === "/" || pointer === "") {
-      return root;
-    }
-
-    if (!pointer || typeof pointer !== "string" || !pointer.startsWith("/")) {
-      return undefined;
-    }
-
-    const tokens = pointer
-      .slice(1)
-      .split("/")
-      .map((token) => token.replace(/~1/g, "/").replace(/~0/g, "~"));
-
-    let current = root;
-    for (const token of tokens) {
-      if (current == null) {
-        return undefined;
-      }
-
-      if (Array.isArray(current)) {
-        const index = Number(token);
-        if (!Number.isInteger(index) || index < 0 || index >= current.length) {
-          return undefined;
-        }
-        current = current[index];
-        continue;
-      }
-
-      if (typeof current === "object" && Object.prototype.hasOwnProperty.call(current, token)) {
-        current = current[token];
-        continue;
-      }
-
-      return undefined;
-    }
-
-    return current;
-  }
-
-  function getValueType(value) {
-    if (value === null) {
-      return "null";
-    }
-    if (Array.isArray(value)) {
-      return "array";
-    }
-    return typeof value;
-  }
-
-  function getValuePreview(value) {
-    if (value === undefined) {
-      return "undefined";
-    }
-    if (typeof value === "string") {
-      const compact = value.length > 120 ? `${value.slice(0, 120)}...` : value;
-      return JSON.stringify(compact);
-    }
-
-    try {
-      const json = JSON.stringify(value);
-      if (typeof json !== "string") {
-        return String(value);
-      }
-      return json.length > 160 ? `${json.slice(0, 160)}...` : json;
-    } catch (error) {
-      return String(value);
-    }
   }
 
   function parseConfigByPath(configPath, content) {
