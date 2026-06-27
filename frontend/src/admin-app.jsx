@@ -8,6 +8,9 @@ import {
   Button,
   Card,
   CardContent,
+  List,
+  ListItemButton,
+  ListItemText,
   Stack,
   Tab,
   Tabs,
@@ -319,6 +322,125 @@ function FileWidget(props) {
   );
 }
 
+function MasterDetailTab({
+  items,
+  onItemsChange,
+  getLabel,
+  getSecondary,
+  detailSchema,
+  detailUiSchema,
+  detailFormDataUnwrap,
+  idPrefix,
+  selectorTitle,
+  detailTitle,
+  addLabel,
+  deleteLabel,
+  minItems,
+  customWidgets,
+}) {
+  const [selectedIndex, setSelectedIndex] = useState(0);
+
+  React.useEffect(() => {
+    const len = Array.isArray(items) ? items.length : 0;
+    if (len === 0) {
+      if (selectedIndex !== 0) setSelectedIndex(0);
+      return;
+    }
+    if (selectedIndex >= len) {
+      setSelectedIndex(len - 1);
+    }
+  }, [items, selectedIndex]);
+
+  const safeItems = Array.isArray(items) ? items : [];
+  const selectedItem =
+    safeItems[selectedIndex] && typeof safeItems[selectedIndex] === 'object'
+      ? safeItems[selectedIndex]
+      : {};
+
+  const limit = minItems ?? 1;
+
+  return (
+    <Box sx={{ display: 'flex', flexDirection: { xs: 'column', md: 'row' }, gap: 2, alignItems: 'stretch' }}>
+      <Box sx={{ width: { xs: '100%', md: 300 }, flexShrink: 0, border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1 }}>
+        <Stack spacing={1}>
+          <Typography variant="subtitle2">{selectorTitle}</Typography>
+          <List dense disablePadding>
+            {safeItems.map((item, index) => (
+              <ListItemButton
+                key={index}
+                selected={index === selectedIndex}
+                onClick={() => setSelectedIndex(index)}
+                sx={{ borderRadius: 1, mb: 0.5 }}
+              >
+                <ListItemText
+                  primary={getLabel(item, index)}
+                  secondary={getSecondary ? getSecondary(item, index) : undefined}
+                />
+              </ListItemButton>
+            ))}
+          </List>
+          <Stack direction="row" spacing={1}>
+            <Button
+              size="small"
+              variant="outlined"
+              onClick={() => {
+                const next = [...safeItems, {}];
+                onItemsChange(next);
+                setSelectedIndex(next.length - 1);
+              }}
+            >
+              {addLabel}
+            </Button>
+            <Button
+              size="small"
+              color="error"
+              variant="outlined"
+              disabled={safeItems.length <= limit}
+              onClick={() => {
+                const next = safeItems.filter((_, idx) => idx !== selectedIndex);
+                onItemsChange(limit === 0 && next.length === 0 ? [] : (next.length > 0 ? next : [{}]));
+                setSelectedIndex((prev) => Math.max(0, prev - 1));
+              }}
+            >
+              {deleteLabel}
+            </Button>
+          </Stack>
+        </Stack>
+      </Box>
+
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Typography variant="subtitle2" sx={{ mb: 1 }}>{detailTitle}</Typography>
+        {detailSchema && safeItems.length > 0 ? (
+          <Form
+            idPrefix={idPrefix}
+            schema={detailSchema}
+            {...(detailUiSchema ? { uiSchema: detailUiSchema } : {})}
+            formData={selectedItem}
+            validator={validator}
+            widgets={customWidgets}
+            noValidate
+            liveValidate={false}
+            noHtml5Validate
+            showErrorList={false}
+            onChange={({ formData: nextFormData }) => {
+              const nextItem = detailFormDataUnwrap
+                ? detailFormDataUnwrap(nextFormData, selectedItem)
+                : (nextFormData && typeof nextFormData === 'object' ? nextFormData : {});
+              const nextItems = [...safeItems];
+              nextItems[selectedIndex] = nextItem;
+              onItemsChange(nextItems);
+            }}
+          >
+            <div />
+          </Form>
+        ) : (
+          <Typography variant="body2" color="text.secondary">No items selected.</Typography>
+        )}
+      </Box>
+    </Box>
+  );
+}
+
 function App() {
   const injectedDomainId = typeof window !== 'undefined' && typeof window.__SSBCONFIG_DOMAIN_ID__ === 'string'
     ? window.__SSBCONFIG_DOMAIN_ID__
@@ -405,6 +527,29 @@ function App() {
     return nextSchema;
   }, [schema, activeTab]);
 
+  const policyDetailSchema = useMemo(() => {
+    if (!schema || !schema.properties || !schema.properties.policies) return null;
+
+    const policiesSchema = getEffectiveSchema(schema, schema.properties.policies);
+    const rawItemSchema = policiesSchema && typeof policiesSchema.items === 'object'
+      ? getEffectiveSchema(schema, policiesSchema.items)
+      : { type: 'object', properties: {} };
+
+    // Strip 'id' — preserved via detailFormDataUnwrap in MasterDetailTab.
+    const { id: _omitId, ...itemProperties } = rawItemSchema.properties || {};
+    const itemRequired = Array.isArray(rawItemSchema.required)
+      ? rawItemSchema.required.filter((f) => f !== 'id')
+      : [];
+
+    return {
+      ...rawItemSchema,
+      properties: itemProperties,
+      ...(itemRequired.length > 0 ? { required: itemRequired } : {}),
+      ...(schema.$defs ? { $defs: schema.$defs } : {}),
+      ...(schema.definitions ? { definitions: schema.definitions } : {})
+    };
+  }, [schema]);
+
   const activeTabUiSchema = useMemo(() => {
     if (!uiSchema || typeof uiSchema !== 'object' || !activeTab) {
       return undefined;
@@ -426,6 +571,56 @@ function App() {
     return Object.keys(merged).length > 0 ? merged : undefined;
   }, [schema, activeTab, activeTabUiSchema]);
 
+  const policyDetailUiSchema = useMemo(() => {
+    if (!schema || !schema.properties || !schema.properties.policies) return undefined;
+
+    const policiesSchema = getEffectiveSchema(schema, schema.properties.policies);
+    const itemSchema = policiesSchema && typeof policiesSchema.items === 'object'
+      ? policiesSchema.items : {};
+    const fallbackUi = buildFileWidgetFallbackUiSchema(schema, itemSchema);
+    const configuredUi =
+      uiSchema?.policies?.items && typeof uiSchema.policies.items === 'object'
+        ? uiSchema.policies.items : {};
+    const merged = mergeUiSchemas(fallbackUi, configuredUi);
+    return Object.keys(merged).length > 0 ? merged : undefined;
+  }, [schema, uiSchema]);
+
+  const deviceGroupDetailSchema = useMemo(() => {
+    if (!schema || !schema.properties || !schema.properties.device_groups) return null;
+
+    const dgSchema = getEffectiveSchema(schema, schema.properties.device_groups);
+    const rawItemSchema = dgSchema && typeof dgSchema.items === 'object'
+      ? getEffectiveSchema(schema, dgSchema.items)
+      : { type: 'object', properties: {} };
+
+    // Strip 'id' — preserved via detailFormDataUnwrap in MasterDetailTab.
+    const { id: _omitId, ...itemProperties } = rawItemSchema.properties || {};
+    const itemRequired = Array.isArray(rawItemSchema.required)
+      ? rawItemSchema.required.filter((f) => f !== 'id')
+      : [];
+
+    return {
+      ...rawItemSchema,
+      properties: itemProperties,
+      ...(itemRequired.length > 0 ? { required: itemRequired } : {}),
+      ...(schema.$defs ? { $defs: schema.$defs } : {}),
+      ...(schema.definitions ? { definitions: schema.definitions } : {})
+    };
+  }, [schema]);
+
+  const deviceGroupDetailUiSchema = useMemo(() => {
+    if (!schema || !schema.properties || !schema.properties.device_groups) return undefined;
+
+    const dgSchema = getEffectiveSchema(schema, schema.properties.device_groups);
+    const itemSchema = dgSchema && typeof dgSchema.items === 'object' ? dgSchema.items : {};
+    const fallbackUi = buildFileWidgetFallbackUiSchema(schema, itemSchema);
+    const configuredUi =
+      uiSchema?.device_groups?.items && typeof uiSchema.device_groups.items === 'object'
+        ? uiSchema.device_groups.items : {};
+    const merged = mergeUiSchemas(fallbackUi, configuredUi);
+    return Object.keys(merged).length > 0 ? merged : undefined;
+  }, [schema, uiSchema]);
+
   const activeTabData = useMemo(() => {
     const defaults = activeTab === 'policies' ? [{}] : [];
     const sectionData = data && typeof data === 'object' ? data[activeTab] : undefined;
@@ -433,6 +628,14 @@ function App() {
       [activeTab]: sectionData === undefined ? defaults : sectionData
     };
   }, [data, activeTab]);
+
+  function makeItemsChangeHandler(key) {
+    return (nextItems) => {
+      setData((prev) => ({ ...(prev || {}), [key]: nextItems }));
+      setPreviewContent('');
+      setPreviewErrors([]);
+    };
+  }
 
   async function fetchBootstrap() {
     setLoading(true);
@@ -678,7 +881,7 @@ function App() {
         <Card>
           <CardContent>
             <Typography variant="h6" sx={{ mb: 2 }}>Config Form</Typography>
-            {schema && availableTabs.length > 0 && activeTabSchema ? (
+            {schema && availableTabs.length > 0 ? (
               <Stack spacing={2}>
                 <Tabs
                   value={activeTab}
@@ -691,26 +894,90 @@ function App() {
                   ))}
                 </Tabs>
 
-                <Form
-                  idPrefix={`ssbconfig-${activeTab}`}
-                  schema={activeTabSchema}
-                  {...(effectiveActiveTabUiSchema ? { uiSchema: effectiveActiveTabUiSchema } : {})}
-                  formData={activeTabData}
-                  validator={validator}
-                  widgets={customWidgets}
-                  noValidate
-                  liveValidate={false}
-                  noHtml5Validate
-                  showErrorList={false}
-                  onChange={({ formData: nextSectionData }) => {
-                    const merged = { ...(data || {}), ...(nextSectionData || {}) };
-                    setData(merged);
-                    setPreviewContent('');
-                    setPreviewErrors([]);
-                  }}
-                >
-                  <div />
-                </Form>
+                {activeTab === 'policies' && policyDetailSchema ? (
+                  <MasterDetailTab
+                    items={Array.isArray(data?.policies) ? data.policies : [{}]}
+                    onItemsChange={makeItemsChangeHandler('policies')}
+                    getLabel={(item, index) => {
+                      if (item && typeof item === 'object') {
+                        if (typeof item.name === 'string' && item.name.trim().length > 0) return item.name;
+                        if (typeof item.id === 'string' && item.id.trim().length > 0) return item.id;
+                      }
+                      return `Policy ${index + 1}`;
+                    }}
+                    getSecondary={(item) =>
+                      item && typeof item.id === 'string' && item.id.trim().length > 0
+                        ? `id: ${item.id}` : undefined
+                    }
+                    detailSchema={policyDetailSchema}
+                    detailUiSchema={policyDetailUiSchema}
+                    detailFormDataUnwrap={(formData, originalItem) => {
+                      const next = formData && typeof formData === 'object' ? formData : {};
+                      return typeof originalItem?.id === 'string'
+                        ? { id: originalItem.id, ...next }
+                        : next;
+                    }}
+                    idPrefix="ssbconfig-policy-detail"
+                    selectorTitle="Policy selector"
+                    detailTitle="Policy details"
+                    addLabel="Add policy"
+                    deleteLabel="Delete selected"
+                    minItems={1}
+                    customWidgets={customWidgets}
+                  />
+                ) : activeTab === 'device_groups' && deviceGroupDetailSchema ? (
+                  <MasterDetailTab
+                    items={Array.isArray(data?.device_groups) ? data.device_groups : []}
+                    onItemsChange={makeItemsChangeHandler('device_groups')}
+                    getLabel={(item, index) =>
+                      item && typeof item === 'object' && typeof item.name === 'string' && item.name.trim().length > 0
+                        ? item.name
+                        : `Device Group ${index + 1}`
+                    }
+                    detailSchema={deviceGroupDetailSchema}
+                    detailUiSchema={deviceGroupDetailUiSchema}
+                    detailFormDataUnwrap={(formData, originalItem) => {
+                      const next = formData && typeof formData === 'object' ? formData : {};
+                      return typeof originalItem?.id === 'string'
+                        ? { id: originalItem.id, ...next }
+                        : next;
+                    }}
+                    getSecondary={(item) =>
+                      item && typeof item.id === 'string' && item.id.trim().length > 0
+                        ? `id: ${item.id}` : undefined
+                    }
+                    idPrefix="ssbconfig-device-group-detail"
+                    selectorTitle="Device group selector"
+                    detailTitle="Device group details"
+                    addLabel="Add device group"
+                    deleteLabel="Delete selected"
+                    minItems={0}
+                    customWidgets={customWidgets}
+                  />
+                ) : (
+                  activeTabSchema && (
+                    <Form
+                      idPrefix={`ssbconfig-${activeTab}`}
+                      schema={activeTabSchema}
+                      {...(effectiveActiveTabUiSchema ? { uiSchema: effectiveActiveTabUiSchema } : {})}
+                      formData={activeTabData}
+                      validator={validator}
+                      widgets={customWidgets}
+                      noValidate
+                      liveValidate={false}
+                      noHtml5Validate
+                      showErrorList={false}
+                      onChange={({ formData: nextSectionData }) => {
+                        const merged = { ...(data || {}), ...(nextSectionData || {}) };
+                        setData(merged);
+                        setPreviewContent('');
+                        setPreviewErrors([]);
+                      }}
+                    >
+                      <div />
+                    </Form>
+                  )
+                )}
               </Stack>
             ) : (
               <Typography variant="body2">Schema not loaded yet.</Typography>
