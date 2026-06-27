@@ -242,7 +242,7 @@ module.exports.ssbconfig = function (parent) {
     return current;
   }
 
-  function getPoliciesOnlySchema(fullSchema, domainSchema) {
+  function getDomainScopedSchema(fullSchema, domainSchema) {
     const base =
       domainSchema && typeof domainSchema === "object"
         ? domainSchema
@@ -255,15 +255,24 @@ module.exports.ssbconfig = function (parent) {
         ? base.properties.policies
         : { type: "array", items: {} };
 
+    const rawDeviceGroupsSchema =
+      base.properties &&
+      typeof base.properties === "object" &&
+      Object.prototype.hasOwnProperty.call(base.properties, "device_groups")
+        ? base.properties.device_groups
+        : { type: "array", items: {} };
+
     const policiesSchema = resolveSchemaRef(fullSchema, rawPoliciesSchema);
+    const deviceGroupsSchema = resolveSchemaRef(fullSchema, rawDeviceGroupsSchema);
 
     const projected = {
       type: "object",
       additionalProperties: false,
       properties: {
-        policies: policiesSchema
+        policies: policiesSchema,
+        device_groups: deviceGroupsSchema
       },
-      required: ["policies"]
+      required: ["policies", "device_groups"]
     };
 
     if (fullSchema && fullSchema.$defs && typeof fullSchema.$defs === "object") {
@@ -277,19 +286,59 @@ module.exports.ssbconfig = function (parent) {
     return projected;
   }
 
-  function getPoliciesOnlyData(domainConfig) {
+  function getDomainScopedData(domainConfig) {
     if (domainConfig && typeof domainConfig === "object" && !Array.isArray(domainConfig)) {
-      if (Array.isArray(domainConfig.policies) && domainConfig.policies.length > 0) {
-        return { policies: domainConfig.policies };
-      }
-      return { policies: [{}] };
+      const policies = Array.isArray(domainConfig.policies) && domainConfig.policies.length > 0
+        ? domainConfig.policies
+        : [{}];
+      const deviceGroups = Array.isArray(domainConfig.device_groups) ? domainConfig.device_groups : [];
+      return {
+        policies,
+        device_groups: deviceGroups
+      };
     }
 
     if (Array.isArray(domainConfig) && domainConfig.length > 0) {
-      return { policies: domainConfig };
+      return { policies: domainConfig, device_groups: [] };
     }
 
-    return { policies: [{}] };
+    return { policies: [{}], device_groups: [] };
+  }
+
+  function getDomainScopedUiSchema(fullUiSchema) {
+    if (!fullUiSchema || typeof fullUiSchema !== "object" || Array.isArray(fullUiSchema)) {
+      return null;
+    }
+
+    if (
+      fullUiSchema.policies &&
+      typeof fullUiSchema.policies === "object" &&
+      fullUiSchema.device_groups &&
+      typeof fullUiSchema.device_groups === "object"
+    ) {
+      return {
+        policies: fullUiSchema.policies,
+        device_groups: fullUiSchema.device_groups
+      };
+    }
+
+    if (
+      fullUiSchema.domains &&
+      typeof fullUiSchema.domains === "object" &&
+      fullUiSchema.domains.items &&
+      typeof fullUiSchema.domains.items === "object"
+    ) {
+      const domainItems = fullUiSchema.domains.items;
+      return {
+        policies: (domainItems.policies && typeof domainItems.policies === "object") ? domainItems.policies : {},
+        device_groups:
+          (domainItems.device_groups && typeof domainItems.device_groups === "object")
+            ? domainItems.device_groups
+            : {}
+      };
+    }
+
+    return null;
   }
 
   function getDomainConfigEntry(fullConfigData, domainId) {
@@ -322,7 +371,7 @@ module.exports.ssbconfig = function (parent) {
     return {};
   }
 
-  function setDomainPolicies(fullConfigData, domainId, policies) {
+  function setDomainConfigSections(fullConfigData, domainId, sections) {
     if (!fullConfigData || typeof fullConfigData !== "object") {
       throw new Error("Config root must be an object");
     }
@@ -348,9 +397,9 @@ module.exports.ssbconfig = function (parent) {
           !Array.isArray(fullConfigData.domains[index])
             ? fullConfigData.domains[index]
             : {};
-        fullConfigData.domains[index] = Object.assign({}, existing, { policies });
+        fullConfigData.domains[index] = Object.assign({}, existing, sections || {});
       } else {
-        fullConfigData.domains.push({ domain: domainId, policies });
+        fullConfigData.domains.push(Object.assign({ domain: domainId }, sections || {}));
       }
       return;
     }
@@ -362,7 +411,7 @@ module.exports.ssbconfig = function (parent) {
         ? fullConfigData.domains[domainId]
         : {};
 
-    fullConfigData.domains[domainId] = Object.assign({}, existingDomainConfig, { policies });
+    fullConfigData.domains[domainId] = Object.assign({}, existingDomainConfig, sections || {});
   }
 
   async function getBootstrapPayload(req, user) {
@@ -405,9 +454,9 @@ module.exports.ssbconfig = function (parent) {
     const scopedConfigData = getDomainConfigEntry(fullConfigData, domainId);
 
     return {
-      configData: getPoliciesOnlyData(scopedConfigData),
-      schema: getPoliciesOnlySchema(fullSchema, domainSchema),
-      uiSchema: uiSchema,
+      configData: getDomainScopedData(scopedConfigData),
+      schema: getDomainScopedSchema(fullSchema, domainSchema),
+      uiSchema: getDomainScopedUiSchema(uiSchema),
       configRepo: {
         owner: settings.configRepoOwner,
         repo: settings.configRepoName,
@@ -475,8 +524,11 @@ module.exports.ssbconfig = function (parent) {
       throw new Error("configData must be an object");
     }
 
-    if (!Object.prototype.hasOwnProperty.call(configData, "policies")) {
-      throw new Error("configData must include a policies field");
+    if (
+      !Object.prototype.hasOwnProperty.call(configData, "policies") ||
+      !Object.prototype.hasOwnProperty.call(configData, "device_groups")
+    ) {
+      throw new Error("configData must include policies and device_groups fields");
     }
 
     if (!Array.isArray(files)) {
@@ -501,7 +553,11 @@ module.exports.ssbconfig = function (parent) {
 
     const transformedConfig = parseConfigByPath(settings.configFilePath, currentConfigContent.content);
     const sanitizedPolicies = sanitizeForConfig(configData.policies);
-    setDomainPolicies(transformedConfig, domainId, Array.isArray(sanitizedPolicies) ? sanitizedPolicies : []);
+    const sanitizedDeviceGroups = sanitizeForConfig(configData.device_groups);
+    setDomainConfigSections(transformedConfig, domainId, {
+      policies: Array.isArray(sanitizedPolicies) ? sanitizedPolicies : [],
+      device_groups: Array.isArray(sanitizedDeviceGroups) ? sanitizedDeviceGroups : []
+    });
     const schemaContent = await githubGetFileContent(
       settings,
       settings.schemaRepoOwner,

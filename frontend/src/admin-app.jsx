@@ -9,16 +9,11 @@ import {
   Card,
   CardContent,
   Stack,
+  Tab,
+  Tabs,
   TextField,
   Typography
 } from '@mui/material';
-
-function normalizePath(input) {
-  return String(input || '')
-    .replace(/\\/g, '/')
-    .replace(/^\/+/, '')
-    .replace(/\/+$/, '');
-}
 
 function toBase64(buffer) {
   let binary = '';
@@ -56,23 +51,37 @@ function resolveJsonPointer(root, ref) {
   return current;
 }
 
-function mergeSchemas(base, extension) {
-  const next = { ...(base || {}) };
-  const extra = extension && typeof extension === 'object' ? extension : {};
+function mergeUiSchemas(base, extra) {
+  if (!base || typeof base !== 'object') return extra || {};
+  if (!extra || typeof extra !== 'object') return base;
 
-  if (extra.type && !next.type) next.type = extra.type;
-  if (extra.properties && typeof extra.properties === 'object') {
-    next.properties = { ...(next.properties || {}), ...extra.properties };
-  }
-  if (extra.items && !next.items) next.items = extra.items;
-  if (Object.prototype.hasOwnProperty.call(extra, 'additionalProperties') && !Object.prototype.hasOwnProperty.call(next, 'additionalProperties')) {
-    next.additionalProperties = extra.additionalProperties;
-  }
-  if (extra['x-ssb-file'] && typeof extra['x-ssb-file'] === 'object') {
-    next['x-ssb-file'] = { ...(next['x-ssb-file'] || {}), ...extra['x-ssb-file'] };
+  const out = { ...base };
+  for (const key of Object.keys(extra)) {
+    const baseVal = out[key];
+    const extraVal = extra[key];
+
+    if (Array.isArray(baseVal) && Array.isArray(extraVal)) {
+      const len = Math.max(baseVal.length, extraVal.length);
+      out[key] = Array.from({ length: len }, (_, idx) => {
+        const b = baseVal[idx];
+        const e = extraVal[idx];
+        if (b && typeof b === 'object' && !Array.isArray(b) && e && typeof e === 'object' && !Array.isArray(e)) {
+          return mergeUiSchemas(b, e);
+        }
+        return e !== undefined ? e : b;
+      });
+      continue;
+    }
+
+    if (baseVal && typeof baseVal === 'object' && !Array.isArray(baseVal) && extraVal && typeof extraVal === 'object' && !Array.isArray(extraVal)) {
+      out[key] = mergeUiSchemas(baseVal, extraVal);
+      continue;
+    }
+
+    out[key] = extraVal;
   }
 
-  return next;
+  return out;
 }
 
 function getEffectiveSchema(rootSchema, schemaNode, seenRefs = new Set()) {
@@ -82,42 +91,86 @@ function getEffectiveSchema(rootSchema, schemaNode, seenRefs = new Set()) {
 
   let resolved = { ...schemaNode };
 
-  if (typeof resolved.$ref === 'string') {
-    const ref = resolved.$ref;
-    if (!seenRefs.has(ref)) {
-      seenRefs.add(ref);
-      const refSchema = resolveJsonPointer(rootSchema, ref);
-      const expandedRef = getEffectiveSchema(rootSchema, refSchema, seenRefs);
-      const withoutRef = { ...resolved };
-      delete withoutRef.$ref;
-      resolved = mergeSchemas(expandedRef, withoutRef);
+  if (typeof resolved.$ref === 'string' && !seenRefs.has(resolved.$ref)) {
+    seenRefs.add(resolved.$ref);
+    const refSchema = resolveJsonPointer(rootSchema, resolved.$ref);
+    const expandedRef = getEffectiveSchema(rootSchema, refSchema, seenRefs);
+    const withoutRef = { ...resolved };
+    delete withoutRef.$ref;
+    resolved = { ...expandedRef, ...withoutRef };
+
+    if (expandedRef['x-ssb-file'] || withoutRef['x-ssb-file']) {
+      resolved['x-ssb-file'] = {
+        ...(expandedRef['x-ssb-file'] || {}),
+        ...(withoutRef['x-ssb-file'] || {})
+      };
     }
   }
 
   if (Array.isArray(resolved.allOf)) {
     let merged = { ...resolved };
     delete merged.allOf;
+
     for (const part of resolved.allOf) {
       const expandedPart = getEffectiveSchema(rootSchema, part, new Set(seenRefs));
-      merged = mergeSchemas(merged, expandedPart);
+      merged = { ...expandedPart, ...merged };
+      if (expandedPart['x-ssb-file'] || merged['x-ssb-file']) {
+        merged['x-ssb-file'] = {
+          ...(expandedPart['x-ssb-file'] || {}),
+          ...(merged['x-ssb-file'] || {})
+        };
+      }
     }
+
     resolved = merged;
   }
 
   return resolved;
 }
 
-function getFileFieldConfig(rootSchema, schemaNode) {
-  const effectiveSchema = getEffectiveSchema(rootSchema, schemaNode);
-  const cfg = effectiveSchema && typeof effectiveSchema['x-ssb-file'] === 'object'
-    ? effectiveSchema['x-ssb-file']
-    : null;
+function buildFileWidgetFallbackUiSchema(rootSchema, schemaNode) {
+  const effective = getEffectiveSchema(rootSchema, schemaNode);
+  const ui = {};
 
-  if (!cfg || cfg.enabled !== true) {
-    return null;
+  const fileCfg = effective && typeof effective['x-ssb-file'] === 'object' ? effective['x-ssb-file'] : null;
+  if (fileCfg && fileCfg.enabled === true) {
+    ui['ui:widget'] = 'file';
+    const options = {};
+    if (typeof fileCfg.accept === 'string' && fileCfg.accept) {
+      options.accept = fileCfg.accept;
+    }
+    if (typeof fileCfg.assetPrefixTemplate === 'string' && fileCfg.assetPrefixTemplate) {
+      options.assetPrefixTemplate = fileCfg.assetPrefixTemplate;
+    }
+    if (Object.keys(options).length > 0) {
+      ui['ui:options'] = options;
+    }
   }
 
-  return cfg;
+  if (effective.properties && typeof effective.properties === 'object') {
+    for (const [key, childSchema] of Object.entries(effective.properties)) {
+      const childUi = buildFileWidgetFallbackUiSchema(rootSchema, childSchema);
+      if (Object.keys(childUi).length > 0) {
+        ui[key] = childUi;
+      }
+    }
+  }
+
+  if (effective.items && typeof effective.items === 'object') {
+    const itemUi = buildFileWidgetFallbackUiSchema(rootSchema, effective.items);
+    if (Object.keys(itemUi).length > 0) {
+      ui.items = itemUi;
+    }
+  }
+
+  if (Array.isArray(effective.oneOf)) {
+    const oneOfUi = effective.oneOf.map((entry) => buildFileWidgetFallbackUiSchema(rootSchema, entry));
+    if (oneOfUi.some((entry) => Object.keys(entry).length > 0)) {
+      ui.oneOf = oneOfUi;
+    }
+  }
+
+  return ui;
 }
 
 function getRepoContext() {
@@ -127,17 +180,21 @@ function getRepoContext() {
   return window.__SSBCONFIG_REPO_CONTEXT__;
 }
 
-function buildDownloadUrlFromTemplate(template, pathValue) {
+function buildDownloadUrl(pathValue) {
   const repo = getRepoContext();
-  if (!repo || !template || !pathValue) {
+  if (!repo || !pathValue) {
     return null;
   }
 
-  return String(template)
-    .replace('{owner}', encodeURIComponent(String(repo.owner || '').trim()))
-    .replace('{repo}', encodeURIComponent(String(repo.repo || '').trim()))
-    .replace('{branch}', encodeURIComponent(String(repo.branch || '').trim()))
-    .replace('{path}', String(pathValue || '').split('/').map((s) => encodeURIComponent(s)).join('/'));
+  const owner = encodeURIComponent(String(repo.owner || '').trim());
+  const repository = encodeURIComponent(String(repo.repo || '').trim());
+  const branch = encodeURIComponent(String(repo.branch || '').trim());
+  const encodedPath = String(pathValue || '').split('/').map((s) => encodeURIComponent(s)).join('/');
+  if (!owner || !repository || !branch || !encodedPath) {
+    return null;
+  }
+
+  return `https://raw.githubusercontent.com/${owner}/${repository}/${branch}/${encodedPath}`;
 }
 
 function resolveAssetPrefix(assetPrefixTemplate, domainId) {
@@ -158,71 +215,6 @@ function sanitizeUploadedFileName(fileName) {
   return String(fileName || 'upload.bin')
     .replace(/[\\/]/g, '_')
     .replace(/[^A-Za-z0-9._-]/g, '_');
-}
-
-function parseBase64DataUrl(value) {
-  if (typeof value !== 'string' || !value.startsWith('data:')) {
-    return null;
-  }
-
-  const nameMatch = value.match(/;name=([^;]+)/i);
-  const base64Match = value.match(/^data:[^,]*;base64,(.+)$/i);
-  if (!base64Match || !base64Match[1]) {
-    return null;
-  }
-
-  return {
-    fileName: sanitizeUploadedFileName(nameMatch ? decodeURIComponent(nameMatch[1]) : 'upload.bin'),
-    base64Content: base64Match[1]
-  };
-}
-
-function normalizeSchemaDrivenFileData(formData, rootSchema, domainId) {
-  if (!formData || typeof formData !== 'object') {
-    return formData;
-  }
-
-  const uploadedFiles = ensureUploadedFilesStore();
-
-  function walk(value, schemaNode) {
-    const effectiveSchema = getEffectiveSchema(rootSchema, schemaNode);
-    const fileConfig = getFileFieldConfig(rootSchema, effectiveSchema);
-    if (fileConfig && typeof value === 'string' && !value.startsWith('config/assets/')) {
-      const parsedDataUrl = parseBase64DataUrl(value);
-      if (parsedDataUrl) {
-        const assetPrefix = resolveAssetPrefix(fileConfig.assetPrefixTemplate, domainId);
-        const pathValue = `${assetPrefix}${parsedDataUrl.fileName}`;
-        uploadedFiles[pathValue] = parsedDataUrl.base64Content;
-        return pathValue;
-      }
-    }
-
-    if (Array.isArray(value)) {
-      const itemSchema = effectiveSchema && effectiveSchema.items ? effectiveSchema.items : {};
-      return value.map((item) => walk(item, itemSchema));
-    }
-
-    if (value && typeof value === 'object') {
-      const output = {};
-      const properties = effectiveSchema && effectiveSchema.properties && typeof effectiveSchema.properties === 'object'
-        ? effectiveSchema.properties
-        : {};
-      const additionalProperties = effectiveSchema ? effectiveSchema.additionalProperties : undefined;
-
-      for (const key of Object.keys(value)) {
-        const childSchema = Object.prototype.hasOwnProperty.call(properties, key)
-          ? properties[key]
-          : (additionalProperties && typeof additionalProperties === 'object' ? additionalProperties : {});
-        output[key] = walk(value[key], childSchema);
-      }
-
-      return output;
-    }
-
-    return value;
-  }
-
-  return walk(formData, rootSchema);
 }
 
 async function parseApiResponse(response) {
@@ -249,16 +241,12 @@ function FileWidget(props) {
     label,
     id,
     required,
-    schema = {},
-    registry = {}
+    schema = {}
   } = props;
 
   const fileInputRef = useRef(null);
-  const rootSchema = registry && registry.rootSchema ? registry.rootSchema : schema;
-  const fileFieldCfg = getFileFieldConfig(rootSchema, schema) || {};
-  const assetPrefixTemplate = fileFieldCfg.assetPrefixTemplate || options.assetPrefixTemplate || 'config/assets/{domain}/';
-  const accept = fileFieldCfg.accept || options.accept || '*/*';
-  const downloadUrlTemplate = fileFieldCfg.downloadUrlTemplate || null;
+  const assetPrefixTemplate = options.assetPrefixTemplate || 'config/assets/{domain}/';
+  const accept = options.accept || '*/*';
 
   const handleFileChange = async (event) => {
     const file = event.target.files?.[0];
@@ -287,7 +275,7 @@ function FileWidget(props) {
 
   const fileName = value ? value.split('/').pop() : null;
   const hasFile = value && value.startsWith('config/assets/');
-  const downloadUrl = hasFile ? buildDownloadUrlFromTemplate(downloadUrlTemplate, value) : null;
+  const downloadUrl = hasFile ? buildDownloadUrl(value) : null;
 
   return (
     <Box sx={{ mb: 2 }}>
@@ -306,15 +294,20 @@ function FileWidget(props) {
       {hasFile && (
         <Stack spacing={0.5} sx={{ mt: 1 }}>
           <Typography variant="caption" sx={{ color: 'green', display: 'block' }}>
-            Current file: {fileName}
-          </Typography>
-          {downloadUrl ? (
-            <Typography variant="caption" sx={{ display: 'block' }}>
-              <a href={downloadUrl} target="_blank" rel="noopener noreferrer" download={fileName || undefined}>
-                Download from GitHub
+            {downloadUrl ? (
+              <a
+                href={downloadUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                download={fileName || undefined}
+                style={{ color: 'inherit' }}
+              >
+                Current file: {fileName}
               </a>
-            </Typography>
-          ) : null}
+            ) : (
+              <>Current file: {fileName}</>
+            )}
+          </Typography>
         </Stack>
       )}
       {value && !hasFile && (
@@ -327,7 +320,6 @@ function FileWidget(props) {
 }
 
 function App() {
-  const submitButtonRef = useRef(null);
   const injectedDomainId = typeof window !== 'undefined' && typeof window.__SSBCONFIG_DOMAIN_ID__ === 'string'
     ? window.__SSBCONFIG_DOMAIN_ID__
     : '';
@@ -345,7 +337,7 @@ function App() {
   const [configFileSha, setConfigFileSha] = useState('');
 
   const [domainId, setDomainId] = useState(injectedDomainId);
-  const [selectedFiles, setSelectedFiles] = useState([]);
+  const [activeTab, setActiveTab] = useState('policies');
   const [commitMessage, setCommitMessage] = useState('Update config and assets from MeshCentral plugin');
 
   const assetPathInfo = useMemo(() => {
@@ -367,6 +359,81 @@ function App() {
     FileWidget
   }), []);
 
+  const availableTabs = useMemo(() => {
+    if (!schema || !schema.properties || typeof schema.properties !== 'object') {
+      return [];
+    }
+
+    const tabs = [];
+    if (Object.prototype.hasOwnProperty.call(schema.properties, 'policies')) {
+      tabs.push({ key: 'policies', label: 'Policies' });
+    }
+    if (Object.prototype.hasOwnProperty.call(schema.properties, 'device_groups')) {
+      tabs.push({ key: 'device_groups', label: 'Device Groups' });
+    }
+    return tabs;
+  }, [schema]);
+
+  React.useEffect(() => {
+    if (!availableTabs.length) return;
+    if (!availableTabs.find((tab) => tab.key === activeTab)) {
+      setActiveTab(availableTabs[0].key);
+    }
+  }, [availableTabs, activeTab]);
+
+  const activeTabSchema = useMemo(() => {
+    if (!schema || !activeTab || !schema.properties || !schema.properties[activeTab]) {
+      return null;
+    }
+
+    const nextSchema = {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        [activeTab]: schema.properties[activeTab]
+      }
+    };
+    if (Array.isArray(schema.required) && schema.required.includes(activeTab)) {
+      nextSchema.required = [activeTab];
+    }
+    if (schema.$defs && typeof schema.$defs === 'object') {
+      nextSchema.$defs = schema.$defs;
+    }
+    if (schema.definitions && typeof schema.definitions === 'object') {
+      nextSchema.definitions = schema.definitions;
+    }
+    return nextSchema;
+  }, [schema, activeTab]);
+
+  const activeTabUiSchema = useMemo(() => {
+    if (!uiSchema || typeof uiSchema !== 'object' || !activeTab) {
+      return undefined;
+    }
+    if (!uiSchema[activeTab] || typeof uiSchema[activeTab] !== 'object') {
+      return undefined;
+    }
+    return { [activeTab]: uiSchema[activeTab] };
+  }, [uiSchema, activeTab]);
+
+  const effectiveActiveTabUiSchema = useMemo(() => {
+    if (!schema || !activeTab || !schema.properties || !schema.properties[activeTab]) {
+      return activeTabUiSchema;
+    }
+
+    const fallbackSection = buildFileWidgetFallbackUiSchema(schema, schema.properties[activeTab]);
+    const fallbackWrapped = Object.keys(fallbackSection).length > 0 ? { [activeTab]: fallbackSection } : {};
+    const merged = mergeUiSchemas(fallbackWrapped, activeTabUiSchema || {});
+    return Object.keys(merged).length > 0 ? merged : undefined;
+  }, [schema, activeTab, activeTabUiSchema]);
+
+  const activeTabData = useMemo(() => {
+    const defaults = activeTab === 'policies' ? [{}] : [];
+    const sectionData = data && typeof data === 'object' ? data[activeTab] : undefined;
+    return {
+      [activeTab]: sectionData === undefined ? defaults : sectionData
+    };
+  }, [data, activeTab]);
+
   async function fetchBootstrap() {
     setLoading(true);
     setStatus({ type: 'info', message: 'Loading config from GitHub...' });
@@ -381,7 +448,6 @@ function App() {
       setUiSchema(payload.uiSchema || null);
       setData(nextData);
       setDomainId(typeof payload.domainId === 'string' ? payload.domainId : injectedDomainId);
-      setSelectedFiles([]);
       setPreviewContent('');
       setPreviewErrors([]);
       setConfigFileSha(typeof payload.configFileSha === 'string' ? payload.configFileSha : '');
@@ -422,14 +488,17 @@ function App() {
     setStatus({ type: 'info', message: 'Committing changes to GitHub...' });
 
     try {
-      const normalizedData = normalizeSchemaDrivenFileData(nextData, schema, domainId);
       const uploadedFiles = getUploadedFiles();
+      const dataToSave = {
+        policies: Array.isArray(nextData?.policies) ? nextData.policies : [],
+        device_groups: Array.isArray(nextData?.device_groups) ? nextData.device_groups : []
+      };
       
       const response = await fetch(buildPluginUrl('?pin=ssbconfig&api=save&user=1'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          configData: normalizedData,
+          configData: dataToSave,
           files: uploadedFiles,
           commitMessage,
           configFileSha
@@ -444,13 +513,12 @@ function App() {
       }
       if (!response.ok) throw new Error(payload.error || 'Save failed');
 
-      setData(normalizedData);
+      setData(dataToSave);
       setStatus({
         type: 'success',
         message: `Committed ${payload.changedFiles ? payload.changedFiles.length : 0} file(s) for domain ${payload.domainId || domainId || injectedDomainId} on ${payload.branch}. Commit: ${payload.commitSha}`,
         rawConfigContent: payload.rawConfigContent || ''
       });
-      setSelectedFiles([]);
       window.__SSBCONFIG_UPLOADED_FILES__ = {}; // Clear after successful commit
     } catch (err) {
       setStatus({ type: 'error', message: err.message || 'Save failed' });
@@ -469,14 +537,17 @@ function App() {
     setStatus({ type: 'info', message: 'Generating backend preview and validating full config.yml...' });
 
     try {
-      const normalizedData = normalizeSchemaDrivenFileData(nextData, schema, domainId);
       const uploadedFiles = getUploadedFiles();
+      const dataToPreview = {
+        policies: Array.isArray(nextData?.policies) ? nextData.policies : [],
+        device_groups: Array.isArray(nextData?.device_groups) ? nextData.device_groups : []
+      };
       
       const response = await fetch(buildPluginUrl('?pin=ssbconfig&api=preview&user=1'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          configData: normalizedData,
+          configData: dataToPreview,
           files: uploadedFiles,
           commitMessage,
           configFileSha
@@ -492,7 +563,7 @@ function App() {
       if (!response.ok) throw new Error(payload.error || 'Preview failed');
 
       const errors = Array.isArray(payload.validationErrors) ? payload.validationErrors : [];
-      setData(normalizedData);
+      setData(dataToPreview);
       setPreviewContent(payload.rawConfigContent || '');
       setPreviewErrors(errors);
 
@@ -516,28 +587,7 @@ function App() {
     }
   }
 
-  async function onFileSelection(evt) {
-    const files = Array.from(evt.target.files || []);
-    const converted = [];
-
-    for (const file of files) {
-      const buffer = await file.arrayBuffer();
-      const relative = normalizePath(file.webkitRelativePath || file.name);
-      converted.push({
-        path: relative,
-        contentBase64: toBase64(buffer)
-      });
-    }
-
-    setSelectedFiles(converted);
-  }
-
   async function onSave() {
-    if (submitButtonRef.current) {
-      submitButtonRef.current.click();
-      return;
-    }
-
     await previewChanges(data);
   }
 
@@ -628,37 +678,40 @@ function App() {
         <Card>
           <CardContent>
             <Typography variant="h6" sx={{ mb: 2 }}>Config Form</Typography>
-            {schema ? (
-              <Form
-                idPrefix="ssbconfig"
-                schema={schema}
-                {...(uiSchema && typeof uiSchema === 'object' && Object.keys(uiSchema).length > 0 ? { uiSchema } : {})}
-                formData={data}
-                validator={validator}
-                widgets={customWidgets}
-                noValidate
-                liveValidate={false}
-                noHtml5Validate
-                showErrorList={false}
-                onChange={({ formData: nextData }) => {
-                  setData(nextData || {});
-                  setPreviewContent('');
-                  setPreviewErrors([]);
-                }}
-                onSubmit={({ formData: nextData }) => {
-                  void previewChanges(nextData || {});
-                }}
-              >
-                <button
-                  ref={submitButtonRef}
-                  type="submit"
-                  style={{ display: 'none' }}
-                  aria-hidden="true"
-                  tabIndex={-1}
+            {schema && availableTabs.length > 0 && activeTabSchema ? (
+              <Stack spacing={2}>
+                <Tabs
+                  value={activeTab}
+                  onChange={(_evt, value) => setActiveTab(value)}
+                  variant="scrollable"
+                  allowScrollButtonsMobile
                 >
-                  Submit
-                </button>
-              </Form>
+                  {availableTabs.map((tab) => (
+                    <Tab key={tab.key} value={tab.key} label={tab.label} />
+                  ))}
+                </Tabs>
+
+                <Form
+                  idPrefix={`ssbconfig-${activeTab}`}
+                  schema={activeTabSchema}
+                  {...(effectiveActiveTabUiSchema ? { uiSchema: effectiveActiveTabUiSchema } : {})}
+                  formData={activeTabData}
+                  validator={validator}
+                  widgets={customWidgets}
+                  noValidate
+                  liveValidate={false}
+                  noHtml5Validate
+                  showErrorList={false}
+                  onChange={({ formData: nextSectionData }) => {
+                    const merged = { ...(data || {}), ...(nextSectionData || {}) };
+                    setData(merged);
+                    setPreviewContent('');
+                    setPreviewErrors([]);
+                  }}
+                >
+                  <div />
+                </Form>
+              </Stack>
             ) : (
               <Typography variant="body2">Schema not loaded yet.</Typography>
             )}
@@ -672,14 +725,6 @@ function App() {
               <Typography variant="caption" sx={{ display: 'block', fontFamily: 'monospace' }}>
                 {assetPathInfo}
               </Typography>
-
-              <Box>
-                <Typography variant="body2" sx={{ mb: 0.5 }}>Upload files or folder</Typography>
-                <input type="file" multiple webkitdirectory="" onChange={onFileSelection} />
-                <Typography variant="caption" sx={{ display: 'block', mt: 1 }}>
-                  Selected files: {selectedFiles.length}
-                </Typography>
-              </Box>
 
               <TextField
                 fullWidth
