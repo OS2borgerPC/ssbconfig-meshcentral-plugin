@@ -375,6 +375,96 @@ function MeshGroupIdWidget(props) {
   );
 }
 
+function PolicyMultiSelectField(props) {
+  const {
+    formData,
+    onChange,
+    schema = {},
+    uiSchema = {},
+    label,
+    required,
+    readonly,
+    disabled,
+    rawErrors = []
+  } = props;
+
+  const policyOptions = Array.isArray(uiSchema['ui:options']?.policies)
+    ? uiSchema['ui:options'].policies
+    : [];
+  const selectedIds = Array.isArray(formData) ? formData.filter((value) => typeof value === 'string' && value.length > 0) : [];
+  const optionById = new Map(
+    policyOptions
+      .map((entry) => {
+        if (!entry || typeof entry !== 'object') return null;
+        const id = typeof entry.id === 'string' ? entry.id : '';
+        if (!id) return null;
+        const name = typeof entry.name === 'string' && entry.name.trim().length > 0 ? entry.name.trim() : id;
+        return [id, name];
+      })
+      .filter(Boolean)
+  );
+
+  const selectedLabel = selectedIds.length > 0
+    ? selectedIds.map((id) => optionById.get(id) || id).join(', ')
+    : 'Select policies';
+
+  return (
+    <TextField
+      select
+      fullWidth
+      size="small"
+      label={label || schema.title || 'Policies'}
+      required={required}
+      value={selectedIds}
+      disabled={Boolean(readonly || disabled)}
+      onChange={(event) => {
+        const nextValue = event.target.value;
+        const nextIds = Array.isArray(nextValue)
+          ? nextValue
+          : String(nextValue || '').split(',').filter((value) => value.length > 0);
+        onChange(nextIds);
+      }}
+      SelectProps={{
+        multiple: true,
+        displayEmpty: true,
+        renderValue: (selected) => {
+          const ids = Array.isArray(selected) ? selected : [];
+          if (ids.length === 0) {
+            return 'Select policies';
+          }
+          return ids.map((id) => optionById.get(id) || id).join(', ');
+        }
+      }}
+      helperText={rawErrors.length > 0 ? rawErrors[0] : 'Choose one or more policies by name; the selected ids are stored in this device group.'}
+      sx={{ mb: 2 }}
+    >
+      {policyOptions.length === 0 ? (
+        <MenuItem value="" disabled>
+          No policies available yet
+        </MenuItem>
+      ) : null}
+      {policyOptions.map((entry) => {
+        if (!entry || typeof entry !== 'object') return null;
+        const id = typeof entry.id === 'string' ? entry.id : '';
+        if (!id) return null;
+        const name = typeof entry.name === 'string' && entry.name.trim().length > 0 ? entry.name.trim() : id;
+        return (
+          <MenuItem key={id} value={id}>
+            {name}
+          </MenuItem>
+        );
+      })}
+      {selectedIds
+        .filter((id) => !optionById.has(id))
+        .map((id) => (
+          <MenuItem key={`missing-${id}`} value={id}>
+            Current value (not found): {id}
+          </MenuItem>
+        ))}
+    </TextField>
+  );
+}
+
 function MasterDetailTab({
   items,
   onItemsChange,
@@ -390,6 +480,7 @@ function MasterDetailTab({
   deleteLabel,
   minItems,
   customWidgets,
+  customFields,
 }) {
   const [selectedIndex, setSelectedIndex] = useState(0);
 
@@ -468,6 +559,7 @@ function MasterDetailTab({
             idPrefix={idPrefix}
             schema={detailSchema}
             {...(detailUiSchema ? { uiSchema: detailUiSchema } : {})}
+            {...(customFields ? { fields: customFields } : {})}
             formData={selectedItem}
             validator={validator}
             widgets={customWidgets}
@@ -534,6 +626,10 @@ function App() {
     file: FileWidget,
     FileWidget,
     meshGroupIdSelect: MeshGroupIdWidget
+  }), []);
+
+  const customFields = useMemo(() => ({
+    policyMultiSelect: PolicyMultiSelectField
   }), []);
 
   const availableTabs = useMemo(() => {
@@ -666,6 +762,22 @@ function App() {
         ? uiSchema.device_groups.items : {};
     const merged = mergeUiSchemas(fallbackUi, configuredUi);
 
+    merged.policies = {
+      ...(merged.policies && typeof merged.policies === 'object' ? merged.policies : {}),
+      'ui:field': 'policyMultiSelect',
+      'ui:options': {
+        ...(
+          merged.policies &&
+          typeof merged.policies === 'object' &&
+          merged.policies['ui:options'] &&
+          typeof merged.policies['ui:options'] === 'object'
+            ? merged.policies['ui:options']
+            : {}
+        ),
+        policies: data && Array.isArray(data.policies) ? data.policies : []
+      }
+    };
+
     merged.id = {
       ...(merged.id && typeof merged.id === 'object' ? merged.id : {}),
       'ui:widget': 'meshGroupIdSelect',
@@ -683,7 +795,7 @@ function App() {
     };
 
     return Object.keys(merged).length > 0 ? merged : undefined;
-  }, [schema, uiSchema, meshDeviceGroups]);
+  }, [schema, uiSchema, meshDeviceGroups, data]);
 
   const activeTabData = useMemo(() => {
     const defaults = activeTab === 'policies' ? [{}] : [];
@@ -1014,6 +1126,7 @@ function App() {
                     deleteLabel="Delete selected"
                     minItems={0}
                     customWidgets={customWidgets}
+                    customFields={customFields}
                   />
                 ) : (
                   activeTabSchema && (
