@@ -686,16 +686,8 @@ function App() {
       ? getEffectiveSchema(schema, policiesSchema.items)
       : { type: 'object', properties: {} };
 
-    // Strip 'id' — preserved via detailFormDataUnwrap in MasterDetailTab.
-    const { id: _omitId, ...itemProperties } = rawItemSchema.properties || {};
-    const itemRequired = Array.isArray(rawItemSchema.required)
-      ? rawItemSchema.required.filter((f) => f !== 'id')
-      : [];
-
     return {
       ...rawItemSchema,
-      properties: itemProperties,
-      ...(itemRequired.length > 0 ? { required: itemRequired } : {}),
       ...(schema.$defs ? { $defs: schema.$defs } : {}),
       ...(schema.definitions ? { definitions: schema.definitions } : {})
     };
@@ -723,18 +715,14 @@ function App() {
   }, [schema, activeTab, activeTabUiSchema]);
 
   const policyDetailUiSchema = useMemo(() => {
-    if (!schema || !schema.properties || !schema.properties.policies) return undefined;
+    return uiSchema?.policies?.items && typeof uiSchema.policies.items === 'object'
+      ? uiSchema.policies.items
+      : undefined;
+  }, [uiSchema]);
 
-    const policiesSchema = getEffectiveSchema(schema, schema.properties.policies);
-    const itemSchema = policiesSchema && typeof policiesSchema.items === 'object'
-      ? policiesSchema.items : {};
-    const fallbackUi = buildFileWidgetFallbackUiSchema(schema, itemSchema);
-    const configuredUi =
-      uiSchema?.policies?.items && typeof uiSchema.policies.items === 'object'
-        ? uiSchema.policies.items : {};
-    const merged = mergeUiSchemas(fallbackUi, configuredUi);
-    return Object.keys(merged).length > 0 ? merged : undefined;
-  }, [schema, uiSchema]);
+  React.useEffect(() => {
+    console.log('[ssbconfig] policyDetailUiSchema', policyDetailUiSchema);
+  }, [policyDetailUiSchema]);
 
   const deviceGroupDetailSchema = useMemo(() => {
     if (!schema || !schema.properties || !schema.properties.device_groups) return null;
@@ -982,7 +970,7 @@ function App() {
           <CardContent>
             <Typography variant="h5">Sikker Selvbetjening Config Editor</Typography>
             <Typography variant="body2" color="text.secondary">
-              JSON Forms bundle running locally inside this plugin.
+              The best config editor.
             </Typography>
             {repoInfo ? (
               <Typography variant="caption" sx={{ fontFamily: 'monospace', display: 'block', mt: 1 }}>
@@ -1088,12 +1076,6 @@ function App() {
                     }
                     detailSchema={policyDetailSchema}
                     detailUiSchema={policyDetailUiSchema}
-                    detailFormDataUnwrap={(formData, originalItem) => {
-                      const next = formData && typeof formData === 'object' ? formData : {};
-                      return typeof originalItem?.id === 'string'
-                        ? { id: originalItem.id, ...next }
-                        : next;
-                    }}
                     idPrefix="ssbconfig-policy-detail"
                     selectorTitle="Policy selector"
                     detailTitle="Policy details"
