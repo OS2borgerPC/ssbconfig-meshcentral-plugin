@@ -593,16 +593,8 @@ function App() {
       ? getEffectiveSchema(schema, dgSchema.items)
       : { type: 'object', properties: {} };
 
-    // Strip 'id' — preserved via detailFormDataUnwrap in MasterDetailTab.
-    const { id: _omitId, ...itemProperties } = rawItemSchema.properties || {};
-    const itemRequired = Array.isArray(rawItemSchema.required)
-      ? rawItemSchema.required.filter((f) => f !== 'id')
-      : [];
-
     return {
       ...rawItemSchema,
-      properties: itemProperties,
-      ...(itemRequired.length > 0 ? { required: itemRequired } : {}),
       ...(schema.$defs ? { $defs: schema.$defs } : {}),
       ...(schema.definitions ? { definitions: schema.definitions } : {})
     };
@@ -942,10 +934,6 @@ function App() {
                         ? { id: originalItem.id, ...next }
                         : next;
                     }}
-                    getSecondary={(item) =>
-                      item && typeof item.id === 'string' && item.id.trim().length > 0
-                        ? `id: ${item.id}` : undefined
-                    }
                     idPrefix="ssbconfig-device-group-detail"
                     selectorTitle="Device group selector"
                     detailTitle="Device group details"
