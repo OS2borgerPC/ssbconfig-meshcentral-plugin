@@ -360,15 +360,19 @@ module.exports.ssbconfig = function (parent) {
       return null;
     }
 
-    if (
-      fullUiSchema.policies &&
-      typeof fullUiSchema.policies === "object" &&
-      fullUiSchema.device_groups &&
-      typeof fullUiSchema.device_groups === "object"
-    ) {
+    const topLevelPolicies =
+      fullUiSchema.policies && typeof fullUiSchema.policies === "object"
+        ? fullUiSchema.policies
+        : null;
+    const topLevelDeviceGroups =
+      fullUiSchema.device_groups && typeof fullUiSchema.device_groups === "object"
+        ? fullUiSchema.device_groups
+        : null;
+
+    if (topLevelPolicies || topLevelDeviceGroups) {
       return {
-        policies: fullUiSchema.policies,
-        device_groups: fullUiSchema.device_groups
+        policies: topLevelPolicies || {},
+        device_groups: topLevelDeviceGroups || {}
       };
     }
 
@@ -379,12 +383,22 @@ module.exports.ssbconfig = function (parent) {
       typeof fullUiSchema.domains.items === "object"
     ) {
       const domainItems = fullUiSchema.domains.items;
+      const domainPolicies =
+        domainItems.policies && typeof domainItems.policies === "object"
+          ? domainItems.policies
+          : null;
+      const domainDeviceGroups =
+        domainItems.device_groups && typeof domainItems.device_groups === "object"
+          ? domainItems.device_groups
+          : null;
+
+      if (!domainPolicies && !domainDeviceGroups) {
+        return null;
+      }
+
       return {
-        policies: (domainItems.policies && typeof domainItems.policies === "object") ? domainItems.policies : {},
-        device_groups:
-          (domainItems.device_groups && typeof domainItems.device_groups === "object")
-            ? domainItems.device_groups
-            : {}
+        policies: domainPolicies || {},
+        device_groups: domainDeviceGroups || {}
       };
     }
 

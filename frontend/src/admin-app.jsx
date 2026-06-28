@@ -55,39 +55,6 @@ function resolveJsonPointer(root, ref) {
   return current;
 }
 
-function mergeUiSchemas(base, extra) {
-  if (!base || typeof base !== 'object') return extra || {};
-  if (!extra || typeof extra !== 'object') return base;
-
-  const out = { ...base };
-  for (const key of Object.keys(extra)) {
-    const baseVal = out[key];
-    const extraVal = extra[key];
-
-    if (Array.isArray(baseVal) && Array.isArray(extraVal)) {
-      const len = Math.max(baseVal.length, extraVal.length);
-      out[key] = Array.from({ length: len }, (_, idx) => {
-        const b = baseVal[idx];
-        const e = extraVal[idx];
-        if (b && typeof b === 'object' && !Array.isArray(b) && e && typeof e === 'object' && !Array.isArray(e)) {
-          return mergeUiSchemas(b, e);
-        }
-        return e !== undefined ? e : b;
-      });
-      continue;
-    }
-
-    if (baseVal && typeof baseVal === 'object' && !Array.isArray(baseVal) && extraVal && typeof extraVal === 'object' && !Array.isArray(extraVal)) {
-      out[key] = mergeUiSchemas(baseVal, extraVal);
-      continue;
-    }
-
-    out[key] = extraVal;
-  }
-
-  return out;
-}
-
 function getEffectiveSchema(rootSchema, schemaNode, seenRefs = new Set()) {
   if (!schemaNode || typeof schemaNode !== 'object') {
     return {};
@@ -130,51 +97,6 @@ function getEffectiveSchema(rootSchema, schemaNode, seenRefs = new Set()) {
   }
 
   return resolved;
-}
-
-function buildFileWidgetFallbackUiSchema(rootSchema, schemaNode) {
-  const effective = getEffectiveSchema(rootSchema, schemaNode);
-  const ui = {};
-
-  const fileCfg = effective && typeof effective['x-ssb-file'] === 'object' ? effective['x-ssb-file'] : null;
-  if (fileCfg && fileCfg.enabled === true) {
-    ui['ui:widget'] = 'file';
-    const options = {};
-    if (typeof fileCfg.accept === 'string' && fileCfg.accept) {
-      options.accept = fileCfg.accept;
-    }
-    if (typeof fileCfg.assetPrefixTemplate === 'string' && fileCfg.assetPrefixTemplate) {
-      options.assetPrefixTemplate = fileCfg.assetPrefixTemplate;
-    }
-    if (Object.keys(options).length > 0) {
-      ui['ui:options'] = options;
-    }
-  }
-
-  if (effective.properties && typeof effective.properties === 'object') {
-    for (const [key, childSchema] of Object.entries(effective.properties)) {
-      const childUi = buildFileWidgetFallbackUiSchema(rootSchema, childSchema);
-      if (Object.keys(childUi).length > 0) {
-        ui[key] = childUi;
-      }
-    }
-  }
-
-  if (effective.items && typeof effective.items === 'object') {
-    const itemUi = buildFileWidgetFallbackUiSchema(rootSchema, effective.items);
-    if (Object.keys(itemUi).length > 0) {
-      ui.items = itemUi;
-    }
-  }
-
-  if (Array.isArray(effective.oneOf)) {
-    const oneOfUi = effective.oneOf.map((entry) => buildFileWidgetFallbackUiSchema(rootSchema, entry));
-    if (oneOfUi.some((entry) => Object.keys(entry).length > 0)) {
-      ui.oneOf = oneOfUi;
-    }
-  }
-
-  return ui;
 }
 
 function getRepoContext() {
@@ -682,6 +604,7 @@ function App() {
     if (!schema || !schema.properties || !schema.properties.policies) return null;
 
     const policiesSchema = getEffectiveSchema(schema, schema.properties.policies);
+   
     const rawItemSchema = policiesSchema && typeof policiesSchema.items === 'object'
       ? getEffectiveSchema(schema, policiesSchema.items)
       : { type: 'object', properties: {} };
@@ -693,6 +616,10 @@ function App() {
     };
   }, [schema]);
 
+  React.useEffect(() => {
+    console.log('[ssbconfig] policyDetailSchema', policyDetailSchema);
+  }, [policyDetailSchema]);
+
   const activeTabUiSchema = useMemo(() => {
     if (!uiSchema || typeof uiSchema !== 'object' || !activeTab) {
       return undefined;
@@ -702,17 +629,6 @@ function App() {
     }
     return { [activeTab]: uiSchema[activeTab] };
   }, [uiSchema, activeTab]);
-
-  const effectiveActiveTabUiSchema = useMemo(() => {
-    if (!schema || !activeTab || !schema.properties || !schema.properties[activeTab]) {
-      return activeTabUiSchema;
-    }
-
-    const fallbackSection = buildFileWidgetFallbackUiSchema(schema, schema.properties[activeTab]);
-    const fallbackWrapped = Object.keys(fallbackSection).length > 0 ? { [activeTab]: fallbackSection } : {};
-    const merged = mergeUiSchemas(fallbackWrapped, activeTabUiSchema || {});
-    return Object.keys(merged).length > 0 ? merged : undefined;
-  }, [schema, activeTab, activeTabUiSchema]);
 
   const policyDetailUiSchema = useMemo(() => {
     return uiSchema?.policies?.items && typeof uiSchema.policies.items === 'object'
@@ -742,13 +658,10 @@ function App() {
   const deviceGroupDetailUiSchema = useMemo(() => {
     if (!schema || !schema.properties || !schema.properties.device_groups) return undefined;
 
-    const dgSchema = getEffectiveSchema(schema, schema.properties.device_groups);
-    const itemSchema = dgSchema && typeof dgSchema.items === 'object' ? dgSchema.items : {};
-    const fallbackUi = buildFileWidgetFallbackUiSchema(schema, itemSchema);
-    const configuredUi =
+    const merged =
       uiSchema?.device_groups?.items && typeof uiSchema.device_groups.items === 'object'
-        ? uiSchema.device_groups.items : {};
-    const merged = mergeUiSchemas(fallbackUi, configuredUi);
+        ? { ...uiSchema.device_groups.items }
+        : {};
 
     merged.policies = {
       ...(merged.policies && typeof merged.policies === 'object' ? merged.policies : {}),
@@ -810,6 +723,9 @@ function App() {
       if (!response.ok) throw new Error(payload.error || 'Bootstrap failed');
 
       const nextData = payload.configData || {};
+
+      console.log('[ssbconfig] bootstrap.uiSchema', payload.uiSchema || null);
+      console.log('[ssbconfig] bootstrap.uiSchema.policies', payload?.uiSchema?.policies);
 
       setSchema(payload.schema || { type: 'object', properties: {} });
       setUiSchema(payload.uiSchema || null);
@@ -1115,7 +1031,7 @@ function App() {
                     <Form
                       idPrefix={`ssbconfig-${activeTab}`}
                       schema={activeTabSchema}
-                      {...(effectiveActiveTabUiSchema ? { uiSchema: effectiveActiveTabUiSchema } : {})}
+                      {...(activeTabUiSchema ? { uiSchema: activeTabUiSchema } : {})}
                       formData={activeTabData}
                       validator={validator}
                       widgets={customWidgets}
