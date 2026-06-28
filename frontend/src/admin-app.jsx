@@ -11,6 +11,7 @@ import {
   List,
   ListItemButton,
   ListItemText,
+  MenuItem,
   Stack,
   Tab,
   Tabs,
@@ -322,6 +323,58 @@ function FileWidget(props) {
   );
 }
 
+function MeshGroupIdWidget(props) {
+  const {
+    value,
+    onChange,
+    options = {},
+    label,
+    id,
+    required,
+    readonly,
+    disabled
+  } = props;
+
+  const meshGroups = Array.isArray(options.meshGroups) ? options.meshGroups : [];
+  const currentValue = typeof value === 'string' ? value : '';
+  const hasCurrentValue = currentValue.length > 0;
+  const containsCurrent = meshGroups.some((entry) => entry && entry.meshid === currentValue);
+
+  return (
+    <TextField
+      id={id}
+      select
+      fullWidth
+      size="small"
+      label={label || 'Device Group ID'}
+      required={required}
+      value={currentValue}
+      disabled={Boolean(readonly || disabled)}
+      onChange={(event) => onChange(event.target.value)}
+      helperText="Select a MeshCentral device group by name; the selected meshid will be stored in this field."
+      sx={{ mb: 2 }}
+    >
+      <MenuItem value="">Select MeshCentral device group</MenuItem>
+      {meshGroups.map((entry) => {
+        if (!entry || typeof entry !== 'object') return null;
+        const meshid = typeof entry.meshid === 'string' ? entry.meshid : '';
+        const name = typeof entry.name === 'string' && entry.name.trim().length > 0 ? entry.name : meshid;
+        if (!meshid) return null;
+        return (
+          <MenuItem key={meshid} value={meshid}>
+            {name}
+          </MenuItem>
+        );
+      })}
+      {hasCurrentValue && !containsCurrent ? (
+        <MenuItem value={currentValue}>
+          Current value (not found): {currentValue}
+        </MenuItem>
+      ) : null}
+    </TextField>
+  );
+}
+
 function MasterDetailTab({
   items,
   onItemsChange,
@@ -457,6 +510,7 @@ function App() {
   const [uiSchema, setUiSchema] = useState(null);
   const [data, setData] = useState({});
   const [configFileSha, setConfigFileSha] = useState('');
+  const [meshDeviceGroups, setMeshDeviceGroups] = useState([]);
 
   const [domainId, setDomainId] = useState(injectedDomainId);
   const [activeTab, setActiveTab] = useState('policies');
@@ -478,7 +532,8 @@ function App() {
 
   const customWidgets = useMemo(() => ({
     file: FileWidget,
-    FileWidget
+    FileWidget,
+    meshGroupIdSelect: MeshGroupIdWidget
   }), []);
 
   const availableTabs = useMemo(() => {
@@ -610,8 +665,25 @@ function App() {
       uiSchema?.device_groups?.items && typeof uiSchema.device_groups.items === 'object'
         ? uiSchema.device_groups.items : {};
     const merged = mergeUiSchemas(fallbackUi, configuredUi);
+
+    merged.id = {
+      ...(merged.id && typeof merged.id === 'object' ? merged.id : {}),
+      'ui:widget': 'meshGroupIdSelect',
+      'ui:options': {
+        ...(
+          merged.id &&
+          typeof merged.id === 'object' &&
+          merged.id['ui:options'] &&
+          typeof merged.id['ui:options'] === 'object'
+            ? merged.id['ui:options']
+            : {}
+        ),
+        meshGroups: meshDeviceGroups
+      }
+    };
+
     return Object.keys(merged).length > 0 ? merged : undefined;
-  }, [schema, uiSchema]);
+  }, [schema, uiSchema, meshDeviceGroups]);
 
   const activeTabData = useMemo(() => {
     const defaults = activeTab === 'policies' ? [{}] : [];
@@ -642,6 +714,7 @@ function App() {
       setSchema(payload.schema || { type: 'object', properties: {} });
       setUiSchema(payload.uiSchema || null);
       setData(nextData);
+      setMeshDeviceGroups(Array.isArray(payload.meshDeviceGroups) ? payload.meshDeviceGroups : []);
       setDomainId(typeof payload.domainId === 'string' ? payload.domainId : injectedDomainId);
       setPreviewContent('');
       setPreviewErrors([]);

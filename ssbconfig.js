@@ -102,6 +102,56 @@ module.exports.ssbconfig = function (parent) {
     return Object.keys(domains);
   }
 
+  function getAvailableMeshDeviceGroups(domainId) {
+    const sources = [
+      obj.meshServer && obj.meshServer.webserver && obj.meshServer.webserver.meshes,
+      obj.meshServer && obj.meshServer.meshes,
+      obj.parent && obj.parent.webserver && obj.parent.webserver.meshes,
+      obj.parent && obj.parent.meshes
+    ];
+
+    const allMeshes = [];
+    for (const source of sources) {
+      if (!source || typeof source !== "object") continue;
+      if (Array.isArray(source)) {
+        allMeshes.push(...source);
+      } else {
+        allMeshes.push(...Object.values(source));
+      }
+    }
+
+    const normalizedDomain = typeof domainId === "string" ? domainId : "";
+    const byMeshId = new Map();
+
+    for (const mesh of allMeshes) {
+      if (!mesh || typeof mesh !== "object") continue;
+
+      const mtype = Number(mesh.mtype);
+      if (!Number.isNaN(mtype) && mtype !== 2) continue;
+
+      const meshDomain = typeof mesh.domain === "string" ? mesh.domain : "";
+      if (normalizedDomain !== "" && meshDomain !== normalizedDomain) continue;
+
+      const meshid =
+        (typeof mesh._id === "string" && mesh._id) ||
+        (typeof mesh.meshid === "string" && mesh.meshid) ||
+        (typeof mesh.id === "string" && mesh.id) ||
+        "";
+      if (!meshid) continue;
+
+      const name =
+        (typeof mesh.name === "string" && mesh.name.trim()) ||
+        (typeof mesh.meshname === "string" && mesh.meshname.trim()) ||
+        meshid;
+
+      if (!byMeshId.has(meshid)) {
+        byMeshId.set(meshid, { meshid, name });
+      }
+    }
+
+    return Array.from(byMeshId.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
   function getPluginSettings() {
     const fromConfig = getPluginConfig();
     const githubToken = (fromConfig.githubToken || process.env.GITHUB_TOKEN || "").trim() || null;
@@ -452,11 +502,13 @@ module.exports.ssbconfig = function (parent) {
     const fullSchema = JSON.parse(schemaContent.content);
     const domainSchema = getDomainSchema(fullSchema);
     const scopedConfigData = getDomainConfigEntry(fullConfigData, domainId);
+    const meshDeviceGroups = getAvailableMeshDeviceGroups(domainId);
 
     return {
       configData: getDomainScopedData(scopedConfigData),
       schema: getDomainScopedSchema(fullSchema, domainSchema),
       uiSchema: getDomainScopedUiSchema(uiSchema),
+      meshDeviceGroups,
       configRepo: {
         owner: settings.configRepoOwner,
         repo: settings.configRepoName,
