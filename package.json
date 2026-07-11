@@ -3,24 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "license": "Apache-2.0",
-  "description": "MeshCentral plugin to edit Sikker Selvbetjening config and commit to GitHub",
+  "description": "Empty MeshCentral plugin scaffold",
   "scripts": {
     "build:ui": "node ./frontend/build.mjs"
   },
-  "dependencies": {
-    "@emotion/react": "^11.14.0",
-    "@emotion/styled": "^11.14.1",
-    "@mui/icons-material": "^7.3.11",
-    "@mui/material": "^7.3.11",
-    "@mui/x-date-pickers": "^8.17.0",
-    "@rjsf/mui": "^6.6.1",
-    "@rjsf/validator-ajv8": "^6.6.1",
-    "ajv": "^8.17.1",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "yaml": "^2.5.0"
-  },
-  "devDependencies": {
-    "esbuild": "^0.25.5"
-  }
+  "dependencies": {},
+  "devDependencies": {}
 }
