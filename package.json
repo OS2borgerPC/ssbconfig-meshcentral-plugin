@@ -3,10 +3,22 @@
   "version": "0.1.0",
   "private": true,
   "license": "Apache-2.0",
-  "description": "Empty MeshCentral plugin scaffold",
+  "description": "MeshCentral plugin for editing domain-scoped YAML config files in GitHub",
   "scripts": {
     "build:ui": "node ./frontend/build.mjs"
   },
-  "dependencies": {},
-  "devDependencies": {}
+  "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@mui/material": "^7.3.2",
+    "@rjsf/mui": "^6.1.2",
+    "@rjsf/validator-ajv8": "^6.1.2",
+    "ajv": "^8.17.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "yaml": "^2.8.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  }
 }
