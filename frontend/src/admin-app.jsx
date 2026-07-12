@@ -181,15 +181,7 @@ function CollapsibleSectionField(props) {
 		idSchema,
 		schema = {},
 		uiSchema,
-		formData,
-		errorSchema,
 		registry,
-		disabled,
-		readonly,
-		autofocus,
-		onChange,
-		onBlur,
-		onFocus,
 		name
 	} = props;
 
@@ -207,8 +199,8 @@ function CollapsibleSectionField(props) {
 		return name || 'Section';
 	}, [name, options.title, schema.title]);
 
-	const ObjectField = registry?.fields?.ObjectField;
-	if (!ObjectField) {
+	const SchemaField = registry?.fields?.SchemaField;
+	if (!SchemaField) {
 		return null;
 	}
 
@@ -247,20 +239,9 @@ function CollapsibleSectionField(props) {
 
 			{!collapsed ? (
 				<div id={`${idSchema?.$id || 'section'}__content`} className="ssb-collapsible-section__content">
-					<ObjectField
-						idSchema={idSchema}
-						schema={schema}
+					<SchemaField
+						{...props}
 						uiSchema={childUiSchema}
-						formData={formData}
-						errorSchema={errorSchema}
-						registry={registry}
-						disabled={disabled}
-						readonly={readonly}
-						autofocus={autofocus}
-						onChange={onChange}
-						onBlur={onBlur}
-						onFocus={onFocus}
-						name={name}
 					/>
 				</div>
 			) : null}
