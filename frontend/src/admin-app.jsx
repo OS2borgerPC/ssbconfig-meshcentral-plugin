@@ -171,6 +171,103 @@ function PolicyReferenceField(props) {
 	);
 }
 
+function readCollapsibleOptions(uiSchema) {
+	const options = uiSchema && typeof uiSchema === 'object' ? uiSchema['ui:options'] : null;
+	return options && typeof options === 'object' ? options : {};
+}
+
+function CollapsibleSectionField(props) {
+	const {
+		idSchema,
+		schema = {},
+		uiSchema,
+		formData,
+		errorSchema,
+		registry,
+		disabled,
+		readonly,
+		autofocus,
+		onChange,
+		onBlur,
+		onFocus,
+		name
+	} = props;
+
+	const options = readCollapsibleOptions(uiSchema);
+	const collapsible = options.collapsible !== false;
+	const [collapsed, setCollapsed] = useState(options.collapsed === true);
+
+	const title = useMemo(() => {
+		if (typeof options.title === 'string' && options.title.trim().length > 0) {
+			return options.title;
+		}
+		if (typeof schema.title === 'string' && schema.title.trim().length > 0) {
+			return schema.title;
+		}
+		return name || 'Section';
+	}, [name, options.title, schema.title]);
+
+	const ObjectField = registry?.fields?.ObjectField;
+	if (!ObjectField) {
+		return null;
+	}
+
+	const childUiSchema = { ...(uiSchema || {}) };
+	delete childUiSchema['ui:field'];
+
+	return (
+		<section className="ssb-collapsible-section" data-field-id={idSchema?.$id || ''}>
+			<button
+				type="button"
+				onClick={() => collapsible && setCollapsed((value) => !value)}
+				className="ssb-collapsible-section__header"
+				aria-expanded={!collapsed}
+				aria-controls={`${idSchema?.$id || 'section'}__content`}
+				disabled={!collapsible}
+				style={{
+					width: '100%',
+					display: 'flex',
+					alignItems: 'center',
+					gap: 8,
+					padding: '8px 10px',
+					border: '1px solid #d0d7e2',
+					borderRadius: 6,
+					background: '#f8fbff',
+					cursor: collapsible ? 'pointer' : 'default',
+					textAlign: 'left',
+					marginBottom: 8,
+					fontWeight: 600
+				}}
+			>
+				<span className="ssb-collapsible-section__chevron" aria-hidden="true">
+					{collapsed ? '▸' : '▾'}
+				</span>
+				<span className="ssb-collapsible-section__title">{title}</span>
+			</button>
+
+			{!collapsed ? (
+				<div id={`${idSchema?.$id || 'section'}__content`} className="ssb-collapsible-section__content">
+					<ObjectField
+						idSchema={idSchema}
+						schema={schema}
+						uiSchema={childUiSchema}
+						formData={formData}
+						errorSchema={errorSchema}
+						registry={registry}
+						disabled={disabled}
+						readonly={readonly}
+						autofocus={autofocus}
+						onChange={onChange}
+						onBlur={onBlur}
+						onFocus={onFocus}
+						name={name}
+					/>
+				</div>
+			) : null}
+		</section>
+	);
+}
+
 function listItemLabel(entry, fallbackPrefix, index) {
 	const content = entry && typeof entry.content === 'object' ? entry.content : {};
 	if (typeof content.name === 'string' && content.name.trim()) return content.name.trim();
@@ -281,7 +378,9 @@ function App() {
 	const policyChoices = useMemo(() => buildPolicyChoices(policies), [policies]);
 
 	const customFields = useMemo(() => ({
-		policyReferenceSelect: PolicyReferenceField
+		policyReferenceSelect: PolicyReferenceField,
+		collapsibleSection: CollapsibleSectionField,
+		CollapsibleSectionField: CollapsibleSectionField
 	}), []);
 
 	const effectivePoliciesUiSchema = useMemo(() => applyPolicyUiEnhancements(policiesUiSchema, domainPaths.assetsPath), [policiesUiSchema, domainPaths.assetsPath]);
