@@ -354,7 +354,7 @@ function App() {
 	function createNewEntry(type) {
 		const baseDir = type === 'policies' ? domainPaths.policiesPath : domainPaths.imageconfigsPath;
 		const now = Date.now();
-		const fileName = `${type}-${now}.yml`;
+		const fileName = `${type === 'policies' ? 'policy' : 'imageconfig'}-${now}.yml`;
 		return {
 			path: joinRepoPath(baseDir, fileName),
 			fileName,
