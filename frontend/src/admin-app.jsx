@@ -38,13 +38,9 @@ function joinRepoPath(...parts) {
 }
 
 function sanitizeFileName(name) {
-	const cleaned = String(name || 'new-file.yml')
+	return String(name || '')
 		.replace(/[\\/]/g, '-')
 		.replace(/[^A-Za-z0-9._-]/g, '-');
-	if (cleaned.toLowerCase().endsWith('.yml') || cleaned.toLowerCase().endsWith('.yaml') || cleaned.toLowerCase().endsWith('.json')) {
-		return cleaned;
-	}
-	return `${cleaned}.yml`;
 }
 
 function toBase64(buffer) {
@@ -70,6 +66,46 @@ function collectUploadEntries() {
 	return Object.entries(store).map(([path, content]) => ({ path, content }));
 }
 
+function isObject(value) {
+	return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function toRegex(pattern) {
+	if (typeof pattern !== 'string' || pattern.length === 0) return null;
+	try {
+		return new RegExp(pattern);
+	} catch (_err) {
+		return null;
+	}
+}
+
+function matchesPattern(value, pattern) {
+	const regex = toRegex(pattern);
+	if (!regex) return true;
+	return regex.test(String(value || ''));
+}
+
+function resolveTemplatePath(template, fileName, fallbackPrefix) {
+	const safeFileName = sanitizeFileName(fileName);
+	const rawTemplate = String(template || '').trim();
+	if (!rawTemplate) {
+		const prefix = String(fallbackPrefix || '').replace(/\/+$/, '');
+		return `${prefix}/${safeFileName}`;
+	}
+
+	const withReplacement = rawTemplate.replace(/\{\{\s*filename\s*\}\}|\{filename\}|\$\{filename\}/gi, safeFileName);
+	if (withReplacement !== rawTemplate) {
+		return withReplacement;
+	}
+
+	const prefix = rawTemplate.replace(/\/+$/, '');
+	return `${prefix}/${safeFileName}`;
+}
+
+function getUiOptions(uiNode) {
+	return isObject(uiNode) && isObject(uiNode['ui:options']) ? uiNode['ui:options'] : {};
+}
+
 async function parseApiResponse(response) {
 	const raw = await response.text();
 	if (!raw) return {};
@@ -80,22 +116,28 @@ async function parseApiResponse(response) {
 	}
 }
 
-function buildPolicyChoices(policies) {
+function buildPolicyChoices(policies, policyFileOptions = {}, policyPattern = '') {
 	return (Array.isArray(policies) ? policies : []).map((entry) => {
 		const data = entry && typeof entry.content === 'object' ? entry.content : {};
-		const fallback = String(entry?.path || '').split('/').pop() || 'policy.yml';
-		const name = typeof data.name === 'string' && data.name.trim() ? data.name.trim() : fallback;
+		const fileName = String(entry?.path || '').split('/').pop() || 'policy.yml';
+		const name = typeof data.name === 'string' && data.name.trim() ? data.name.trim() : fileName;
+		const referencePath = resolveTemplatePath(policyFileOptions.assetPrefixTemplate, fileName, '../policies');
+		if (!matchesPattern(referencePath, policyPattern)) {
+			return null;
+		}
 		return {
-			path: String(entry?.path || ''),
+			path: referencePath,
 			name
 		};
-	}).filter((item) => item.path);
+	}).filter((item) => item && item.path);
 }
 
 function AssetFileWidget(props) {
-	const { value, onChange, options = {}, label, id, required } = props;
+	const { value, onChange, options = {}, label, id, required, schema = {}, rawErrors = [] } = props;
 	const accept = options.accept || '*/*';
 	const assetBasePath = normalizePath(options.assetBasePath || 'config/default/assets');
+	const assetPrefixTemplate = options.assetPrefixTemplate || '/assets';
+	const [localError, setLocalError] = useState('');
 
 	return (
 		<Box sx={{ mb: 2 }}>
@@ -111,15 +153,32 @@ function AssetFileWidget(props) {
 					const file = event.target.files && event.target.files[0];
 					if (!file) return;
 					const safeName = sanitizeFileName(file.name);
-					const pathValue = joinRepoPath(assetBasePath, safeName);
+					const uploadPath = joinRepoPath(assetBasePath, safeName);
+					const formPathValue = resolveTemplatePath(assetPrefixTemplate, safeName, '/assets');
+					if (!matchesPattern(formPathValue, schema.pattern)) {
+						setLocalError(`Selected path does not match pattern: ${schema.pattern}`);
+						event.target.value = '';
+						return;
+					}
 					const arrayBuffer = await file.arrayBuffer();
 					const base64 = toBase64(arrayBuffer);
 					const store = ensureUploadStore();
-					store[pathValue] = base64;
-					onChange(pathValue);
+					store[uploadPath] = base64;
+					setLocalError('');
+					onChange(formPathValue);
 					event.target.value = '';
 				}}
 			/>
+			{localError ? (
+				<Typography variant="caption" sx={{ display: 'block', mt: 1, color: 'error.main' }}>
+					{localError}
+				</Typography>
+			) : null}
+			{!localError && rawErrors.length > 0 ? (
+				<Typography variant="caption" sx={{ display: 'block', mt: 1, color: 'error.main' }}>
+					{rawErrors[0]}
+				</Typography>
+			) : null}
 			{value ? (
 				<Typography variant="caption" sx={{ display: 'block', mt: 1, fontFamily: 'monospace' }}>
 					{String(value)}
@@ -130,12 +189,15 @@ function AssetFileWidget(props) {
 }
 
 function PolicyReferenceField(props) {
-	const { formData, onChange, uiSchema = {}, label, required, readonly, disabled, rawErrors = [] } = props;
+	const { formData, onChange, uiSchema = {}, label, required, readonly, disabled, rawErrors = [], schema = {} } = props;
 	const options = uiSchema['ui:options'] || {};
 	const choices = Array.isArray(options.policies) ? options.policies : [];
+	const allowedPaths = new Set(choices.map((entry) => entry.path));
+	const pattern = typeof options.policyPattern === 'string' ? options.policyPattern : schema?.items?.pattern;
 
 	const byPath = new Map(choices.map((entry) => [entry.path, entry.name]));
 	const selected = Array.isArray(formData) ? formData.filter((v) => typeof v === 'string' && v.length > 0) : [];
+	const invalidSelected = selected.filter((item) => !matchesPattern(item, pattern));
 
 	return (
 		<TextField
@@ -148,7 +210,8 @@ function PolicyReferenceField(props) {
 			disabled={Boolean(readonly || disabled)}
 			onChange={(event) => {
 				const raw = event.target.value;
-				onChange(Array.isArray(raw) ? raw : String(raw || '').split(',').filter(Boolean));
+				const next = (Array.isArray(raw) ? raw : String(raw || '').split(',').filter(Boolean)).filter((item) => allowedPaths.has(item));
+				onChange(next);
 			}}
 			SelectProps={{
 				multiple: true,
@@ -158,7 +221,11 @@ function PolicyReferenceField(props) {
 					return values.map((item) => byPath.get(item) || item).join(', ');
 				}
 			}}
-			helperText={rawErrors.length > 0 ? rawErrors[0] : 'Selected policy names are displayed, but policy file paths are stored.'}
+			helperText={
+				invalidSelected.length > 0
+					? `Some selected values do not match schema pattern: ${pattern}`
+					: (rawErrors.length > 0 ? rawErrors[0] : 'Selected policy names are displayed, but policy file paths are stored.')
+			}
 			sx={{ mb: 2 }}
 		>
 			{choices.map((entry) => (
@@ -255,74 +322,95 @@ function listItemLabel(entry, fallbackPrefix, index) {
 	return entry?.fileName || `${fallbackPrefix} ${index + 1}`;
 }
 
-function applyPolicyUiEnhancements(baseUiSchema, assetBasePath) {
-	const next = (baseUiSchema && typeof baseUiSchema === 'object') ? { ...baseUiSchema } : {};
+function applyPolicyUiEnhancements(uiNode, context) {
+	if (Array.isArray(uiNode)) {
+		return uiNode.map((entry) => applyPolicyUiEnhancements(entry, context));
+	}
 
-	if (!next.desktop || typeof next.desktop !== 'object') next.desktop = {};
-	next.desktop = {
-		...next.desktop,
-		background_image_file: {
-			...(next.desktop.background_image_file && typeof next.desktop.background_image_file === 'object' ? next.desktop.background_image_file : {}),
-			'ui:widget': 'assetFileWidget',
-			'ui:options': {
-				...(
-					next.desktop.background_image_file &&
-					typeof next.desktop.background_image_file === 'object' &&
-					next.desktop.background_image_file['ui:options'] &&
-					typeof next.desktop.background_image_file['ui:options'] === 'object'
-						? next.desktop.background_image_file['ui:options']
-						: {}
-				),
-				assetBasePath
-			}
-		}
-	};
+	if (!isObject(uiNode)) {
+		return uiNode;
+	}
 
-	if (!next.printers || typeof next.printers !== 'object') next.printers = {};
-	if (!next.printers.items || typeof next.printers.items !== 'object') next.printers.items = {};
-	next.printers = {
-		...next.printers,
-		items: {
-			...next.printers.items,
-			ppd_file: {
-				...(next.printers.items.ppd_file && typeof next.printers.items.ppd_file === 'object' ? next.printers.items.ppd_file : {}),
-				'ui:widget': 'assetFileWidget',
-				'ui:options': {
-					...(
-						next.printers.items.ppd_file &&
-						typeof next.printers.items.ppd_file === 'object' &&
-						next.printers.items.ppd_file['ui:options'] &&
-						typeof next.printers.items.ppd_file['ui:options'] === 'object'
-							? next.printers.items.ppd_file['ui:options']
-							: {}
-					),
-					assetBasePath
-				}
-			}
-		}
-	};
+	const next = { ...uiNode };
+	Object.keys(next).forEach((key) => {
+		next[key] = applyPolicyUiEnhancements(next[key], context);
+	});
+
+	const options = getUiOptions(next);
+	const assetFile = isObject(options.assetFile) ? options.assetFile : null;
+	if (assetFile) {
+		next['ui:widget'] = 'assetFileWidget';
+		next['ui:options'] = {
+			...options,
+			accept: typeof assetFile.accept === 'string' ? assetFile.accept : (options.accept || '*/*'),
+			assetPrefixTemplate: typeof assetFile.assetPrefixTemplate === 'string' ? assetFile.assetPrefixTemplate : (options.assetPrefixTemplate || '/assets'),
+			assetBasePath: context.assetBasePath
+		};
+	}
 
 	return next;
 }
 
-function applyImageUiEnhancements(baseUiSchema, policyChoices) {
-	const next = (baseUiSchema && typeof baseUiSchema === 'object') ? { ...baseUiSchema } : {};
-	next.policies = {
-		...(next.policies && typeof next.policies === 'object' ? next.policies : {}),
-		'ui:field': 'policyReferenceSelect',
-		'ui:options': {
-			...(
-				next.policies &&
-				typeof next.policies === 'object' &&
-				next.policies['ui:options'] &&
-				typeof next.policies['ui:options'] === 'object'
-					? next.policies['ui:options']
-					: {}
-			),
-			policies: policyChoices
+function applyImageUiEnhancements(schemaNode, uiNode, context) {
+	const next = isObject(uiNode) ? { ...uiNode } : {};
+
+	if (isObject(schemaNode) && schemaNode.type === 'object' && isObject(schemaNode.properties)) {
+		Object.entries(schemaNode.properties).forEach(([propName, propSchema]) => {
+			next[propName] = applyImageUiEnhancements(propSchema, next[propName], context);
+		});
+	}
+
+	if (isObject(schemaNode) && schemaNode.type === 'array') {
+		const itemSchema = Array.isArray(schemaNode.items) ? schemaNode.items[0] : schemaNode.items;
+		next.items = applyImageUiEnhancements(itemSchema, next.items, context);
+
+		const ownOptions = getUiOptions(next);
+		const itemOptions = getUiOptions(next.items);
+		const policyFile = isObject(ownOptions.policyFile) ? ownOptions.policyFile : (isObject(itemOptions.policyFile) ? itemOptions.policyFile : null);
+
+		if (policyFile) {
+			next['ui:field'] = 'policyReferenceSelect';
+			next['ui:options'] = {
+				...ownOptions,
+				policies: context.policyChoices,
+				policyPattern: typeof itemSchema?.pattern === 'string' ? itemSchema.pattern : ''
+			};
 		}
-	};
+	}
+
 	return next;
+}
+
+function findPolicyFileConfig(schemaNode, uiNode) {
+	if (!isObject(schemaNode)) return null;
+
+	if (schemaNode.type === 'array') {
+		const itemSchema = Array.isArray(schemaNode.items) ? schemaNode.items[0] : schemaNode.items;
+		const ownOptions = getUiOptions(uiNode);
+		const itemsUi = isObject(uiNode) ? uiNode.items : undefined;
+		const itemOptions = getUiOptions(itemsUi);
+		const policyFile = isObject(ownOptions.policyFile) ? ownOptions.policyFile : (isObject(itemOptions.policyFile) ? itemOptions.policyFile : null);
+		if (policyFile) {
+			return {
+				options: policyFile,
+				pattern: typeof itemSchema?.pattern === 'string' ? itemSchema.pattern : ''
+			};
+		}
+	}
+
+	if (schemaNode.type === 'object' && isObject(schemaNode.properties)) {
+		for (const [propName, propSchema] of Object.entries(schemaNode.properties)) {
+			const found = findPolicyFileConfig(propSchema, isObject(uiNode) ? uiNode[propName] : undefined);
+			if (found) return found;
+		}
+	}
+
+	if (schemaNode.type === 'array') {
+		const itemSchema = Array.isArray(schemaNode.items) ? schemaNode.items[0] : schemaNode.items;
+		return findPolicyFileConfig(itemSchema, isObject(uiNode) ? uiNode.items : undefined);
+	}
+
+	return null;
 }
 
 function App() {
@@ -356,7 +444,11 @@ function App() {
 		assetFileWidget: AssetFileWidget
 	}), []);
 
-	const policyChoices = useMemo(() => buildPolicyChoices(policies), [policies]);
+	const policyFileConfig = useMemo(() => findPolicyFileConfig(imageSchema, imageUiSchema), [imageSchema, imageUiSchema]);
+	const policyChoices = useMemo(
+		() => buildPolicyChoices(policies, policyFileConfig?.options || {}, policyFileConfig?.pattern || ''),
+		[policies, policyFileConfig]
+	);
 
 	const customFields = useMemo(() => ({
 		policyReferenceSelect: PolicyReferenceField,
@@ -364,8 +456,14 @@ function App() {
 		CollapsibleSectionField: CollapsibleSectionField
 	}), []);
 
-	const effectivePoliciesUiSchema = useMemo(() => applyPolicyUiEnhancements(policiesUiSchema, domainPaths.assetsPath), [policiesUiSchema, domainPaths.assetsPath]);
-	const effectiveImageUiSchema = useMemo(() => applyImageUiEnhancements(imageUiSchema, policyChoices), [imageUiSchema, policyChoices]);
+	const effectivePoliciesUiSchema = useMemo(
+		() => applyPolicyUiEnhancements(policiesUiSchema, { assetBasePath: domainPaths.assetsPath }),
+		[policiesUiSchema, domainPaths.assetsPath]
+	);
+	const effectiveImageUiSchema = useMemo(
+		() => applyImageUiEnhancements(imageSchema, imageUiSchema, { policyChoices }),
+		[imageSchema, imageUiSchema, policyChoices]
+	);
 
 	const normalizeEntries = (entries, baseDir) => {
 		const list = Array.isArray(entries) ? entries : [];
