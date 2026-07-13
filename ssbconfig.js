@@ -374,6 +374,17 @@ module.exports.ssbconfig = function (parent) {
     return Array.isArray(value) ? value : [];
   }
 
+  // Treats template prefixes without actual filenames as empty optional values.
+  function isPrefixOnlyPlaceholderPath(value) {
+    if (typeof value !== "string") return false;
+    const trimmed = value.trim();
+    if (!trimmed) return false;
+    return trimmed === "/assets" ||
+      trimmed === "/assets/" ||
+      trimmed === "../policies" ||
+      trimmed === "../policies/";
+  }
+
   // Recursively strips empty values so optional blank fields are not validated or saved.
   function sanitizeForConfig(value) {
     if (value === null || value === undefined) {
@@ -381,7 +392,10 @@ module.exports.ssbconfig = function (parent) {
     }
 
     if (typeof value === "string") {
-      return value.trim().length === 0 ? undefined : value;
+      const trimmed = value.trim();
+      if (trimmed.length === 0) return undefined;
+      if (isPrefixOnlyPlaceholderPath(trimmed)) return undefined;
+      return value;
     }
 
     if (Array.isArray(value)) {
