@@ -73,12 +73,6 @@ module.exports.ssbconfig = function (parent) {
       const body = await readJsonBody(req);
       const api = req.query && req.query.api;
 
-      if (api === "preview") {
-        const result = await previewChanges(req, user, body);
-        sendJson(res, 200, result);
-        return;
-      }
-
       if (api === "save") {
         const result = await saveChanges(req, user, body);
         sendJson(res, 200, result);
@@ -423,8 +417,8 @@ module.exports.ssbconfig = function (parent) {
     return value;
   }
 
-  // Prepares and validates incoming preview/save payload and computes GitHub file changes.
-  async function preparePreviewOrSave(req, user, body) {
+  // Prepares and validates incoming save payload and computes GitHub file changes.
+  async function prepareSave(req, user, body) {
     const settings = getPluginSettings();
     ensureSettings(settings);
 
@@ -510,21 +504,9 @@ module.exports.ssbconfig = function (parent) {
     };
   }
 
-  // Returns a validation-only preview result without committing to GitHub.
-  async function previewChanges(req, user, body) {
-    const prepared = await preparePreviewOrSave(req, user, body);
-    return {
-      ok: true,
-      branch: prepared.branch,
-      domainId: prepared.domainId,
-      changedFiles: prepared.fileChanges.map((f) => f.path),
-      validationErrors: prepared.validationErrors
-    };
-  }
-
   // Validates and commits file changes to GitHub when there are no validation errors.
   async function saveChanges(req, user, body) {
-    const prepared = await preparePreviewOrSave(req, user, body);
+    const prepared = await prepareSave(req, user, body);
 
     if (prepared.validationErrors.length > 0) {
       return {

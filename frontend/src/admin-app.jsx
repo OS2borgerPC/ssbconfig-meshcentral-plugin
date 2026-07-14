@@ -309,7 +309,6 @@ function App() {
 		: '';
 
 	const [loading, setLoading] = useState(true);
-	const [previewing, setPreviewing] = useState(false);
 	const [saving, setSaving] = useState(false);
 	const [status, setStatus] = useState({ type: 'info', message: 'Loading data from GitHub...' });
 
@@ -425,8 +424,8 @@ function App() {
 		};
 	}
 
-	async function runPreviewOrSave(api) {
-		// Sends preview or save requests and updates validation/commit status.
+	async function runSave() {
+		// Sends save request and updates validation/commit status.
 		const body = {
 			policies: policies.map((entry) => ({ path: entry.path, content: entry.content })),
 			imageconfigs: imageconfigs.map((entry) => ({ path: entry.path, content: entry.content })),
@@ -434,21 +433,19 @@ function App() {
 			commitMessage
 		};
 
-		const isPreview = api === 'preview';
-		if (isPreview) setPreviewing(true);
-		else setSaving(true);
+		setSaving(true);
 
-		setStatus({ type: 'info', message: isPreview ? 'Validating against schemas...' : 'Committing to GitHub...' });
+		setStatus({ type: 'info', message: 'Committing to GitHub...' });
 
 		try {
-			const response = await fetch(buildPluginUrl(`?pin=ssbconfig&api=${api}&user=1`), {
+			const response = await fetch(buildPluginUrl('?pin=ssbconfig&api=save&user=1'), {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify(body)
 			});
 
 			const payload = await parseApiResponse(response);
-			if (!response.ok) throw new Error(payload.error || `${api} failed`);
+			if (!response.ok) throw new Error(payload.error || 'save failed');
 
 			const errors = Array.isArray(payload.validationErrors) ? payload.validationErrors : [];
 			setValidationErrors(errors);
@@ -461,20 +458,19 @@ function App() {
 				return;
 			}
 
-			if (api === 'save' && payload.commitSha) {
+			if (payload.commitSha) {
 				setStatus({
 					type: 'success',
 					message: `Committed ${payload.changedFiles ? payload.changedFiles.length : 0} file(s) to ${payload.branch}. Commit: ${payload.commitSha}`
 				});
 				window.__SSBCONFIG_UPLOADS__ = {};
 			} else {
-				setStatus({ type: 'success', message: 'Preview validation passed.' });
+				setStatus({ type: 'success', message: 'Validation passed.' });
 			}
 		} catch (err) {
-			setStatus({ type: 'error', message: err.message || `${api} failed` });
+			setStatus({ type: 'error', message: err.message || 'save failed' });
 		} finally {
-			if (isPreview) setPreviewing(false);
-			else setSaving(false);
+			setSaving(false);
 		}
 	}
 
@@ -596,6 +592,36 @@ function App() {
 					</CardContent>
 				</Card>
 
+				<Card>
+					<CardContent>
+						<Typography variant="h6" sx={{ mb: 2 }}>Validation + Save</Typography>
+
+						<Stack spacing={2}>
+							<TextField
+								fullWidth
+								label="Commit message"
+								value={commitMessage}
+								onChange={(event) => setCommitMessage(event.target.value)}
+							/>
+
+							<Stack direction="row" spacing={1}>
+								<Button
+									variant="contained"
+									color="success"
+									disabled={loading || saving}
+									onClick={runSave}
+								>
+									{saving ? 'Saving...' : 'Commit to GitHub'}
+								</Button>
+
+								<Button variant="outlined" disabled={loading || saving} onClick={fetchBootstrap}>
+									Reload
+								</Button>
+							</Stack>
+						</Stack>
+					</CardContent>
+				</Card>
+
 				<Alert severity={status.type === 'error' ? 'error' : status.type === 'success' ? 'success' : 'info'}>
 					<Typography variant="body2">{status.message}</Typography>
 				</Alert>
@@ -638,43 +664,6 @@ function App() {
 					</CardContent>
 				</Card>
 
-				<Card>
-					<CardContent>
-						<Typography variant="h6" sx={{ mb: 2 }}>Validation + Save</Typography>
-
-						<Stack spacing={2}>
-							<TextField
-								fullWidth
-								label="Commit message"
-								value={commitMessage}
-								onChange={(event) => setCommitMessage(event.target.value)}
-							/>
-
-							<Stack direction="row" spacing={1}>
-								<Button
-									variant="contained"
-									disabled={loading || previewing || saving}
-									onClick={() => runPreviewOrSave('preview')}
-								>
-									{previewing ? 'Validating...' : 'Preview + Validate'}
-								</Button>
-
-								<Button
-									variant="contained"
-									color="success"
-									disabled={loading || previewing || saving}
-									onClick={() => runPreviewOrSave('save')}
-								>
-									{saving ? 'Saving...' : 'Commit to GitHub'}
-								</Button>
-
-								<Button variant="outlined" disabled={loading || previewing || saving} onClick={fetchBootstrap}>
-									Reload
-								</Button>
-							</Stack>
-						</Stack>
-					</CardContent>
-				</Card>
 			</Stack>
 		</Box>
 	);
