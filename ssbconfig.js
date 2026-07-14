@@ -305,6 +305,7 @@ module.exports.ssbconfig = function (parent) {
     ensureSettings(settings);
 
     const branch = settings.targetBranch || await githubGetDefaultBranch(settings, settings.configRepoOwner, settings.configRepoName);
+    const loadedSha = await githubGetBranchHeadSha(settings, settings.configRepoOwner, settings.configRepoName, branch);
     const domainId = resolveRequestDomainId(req, user);
     const domainPaths = getDomainPaths(settings, domainId);
 
@@ -317,6 +318,7 @@ module.exports.ssbconfig = function (parent) {
     return {
       domainId,
       branch,
+      loadedSha,
       configRepo: {
         owner: settings.configRepoOwner,
         repo: settings.configRepoName
@@ -574,6 +576,16 @@ module.exports.ssbconfig = function (parent) {
   async function githubGetDefaultBranch(settings, owner, repo) {
     const info = await githubRequest(settings, "GET", `/repos/${owner}/${repo}`);
     return info.default_branch;
+  }
+
+  // Returns the current commit SHA at the tip of a repository branch.
+  async function githubGetBranchHeadSha(settings, owner, repo, branch) {
+    const ref = await githubRequest(
+      settings,
+      "GET",
+      `/repos/${owner}/${repo}/git/ref/heads/${encodeURIComponent(branch)}`
+    );
+    return (ref && ref.object && typeof ref.object.sha === "string") ? ref.object.sha : "";
   }
 
   // Reads directory entries from GitHub and tolerates missing directories as empty.

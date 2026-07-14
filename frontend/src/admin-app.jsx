@@ -314,6 +314,7 @@ function App() {
 
 	const [domainId, setDomainId] = useState(injectedDomainId);
 	const [branch, setBranch] = useState('');
+	const [loadedSha, setLoadedSha] = useState('');
 	const [domainPaths, setDomainPaths] = useState({ policiesPath: '', imageconfigsPath: '', assetsPath: '' });
 
 	const [policiesSchema, setPoliciesSchema] = useState({ type: 'object', properties: {} });
@@ -370,6 +371,7 @@ function App() {
 
 			setDomainId(typeof payload.domainId === 'string' ? payload.domainId : injectedDomainId);
 			setBranch(typeof payload.branch === 'string' ? payload.branch : '');
+			setLoadedSha(typeof payload.loadedSha === 'string' ? payload.loadedSha : '');
 			setDomainPaths(payload.domainPaths || { policiesPath: '', imageconfigsPath: '', assetsPath: '' });
 
 			const schemas = payload.schemas || {};
@@ -573,28 +575,15 @@ function App() {
 			<Stack spacing={2}>
 				<Card>
 					<CardContent>
-						<Typography variant="h5">Sikker Selvbetjening Config Editor</Typography>
-						<Typography variant="body2" color="text.secondary">
-							Domain-aware GitHub editor for policies and imageconfigs.
-						</Typography>
-						<Typography variant="caption" sx={{ display: 'block', mt: 1, fontFamily: 'monospace' }}>
-							Domain: {domainId || 'default'} | Branch: {branch || '-'}
-						</Typography>
-						<Typography variant="caption" sx={{ display: 'block', mt: 0.5, fontFamily: 'monospace' }}>
-							Policies: {domainPaths.policiesPath || '-'}
-						</Typography>
-						<Typography variant="caption" sx={{ display: 'block', mt: 0.5, fontFamily: 'monospace' }}>
-							Imageconfigs: {domainPaths.imageconfigsPath || '-'}
-						</Typography>
-						<Typography variant="caption" sx={{ display: 'block', mt: 0.5, fontFamily: 'monospace' }}>
-							Assets: {domainPaths.assetsPath || '-'}
+						<Typography variant="caption" sx={{ display: 'block', fontFamily: 'monospace' }}>
+							Domain: {domainId || 'default'} | Branch: {branch || '-'} | SHA: {loadedSha || '-'}
 						</Typography>
 					</CardContent>
 				</Card>
 
 				<Card>
 					<CardContent>
-						<Typography variant="h6" sx={{ mb: 2 }}>Validation + Save</Typography>
+						<Typography variant="h6" sx={{ mb: 2 }}>Save and commit to Github</Typography>
 
 						<Stack spacing={2}>
 							<TextField
