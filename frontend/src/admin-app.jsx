@@ -128,23 +128,6 @@ async function parseApiResponse(response) {
 	}
 }
 
-function buildPolicyChoices(policies, policyFileOptions = {}, policyPattern = '') {
-	// Builds policy dropdown choices filtered by optional pattern matching.
-	return (Array.isArray(policies) ? policies : []).map((entry) => {
-		const data = entry && typeof entry.content === 'object' ? entry.content : {};
-		const fileName = String(entry?.path || '').split('/').pop() || 'policy.yml';
-		const name = typeof data.name === 'string' && data.name.trim() ? data.name.trim() : fileName;
-		const referencePath = resolveTemplatePath(policyFileOptions.assetPrefixTemplate, fileName, '../policies');
-		if (!matchesPattern(referencePath, policyPattern)) {
-			return null;
-		}
-		return {
-			path: referencePath,
-			name
-		};
-	}).filter((item) => item && item.path);
-}
-
 function AssetFileWidget(props) {
 	// RJSF custom widget that uploads a file and writes an asset path to the form.
 	const { value, onChange, options = {}, label, id, required, schema = {}, rawErrors = [] } = props;
@@ -319,57 +302,6 @@ function applyPolicyUiEnhancements(uiNode, context) {
 	return next;
 }
 
-function applyImageUiEnhancements(schemaNode, uiNode, context) {
-	// Recursively prepares image uiSchema structure to mirror schema shape.
-	const next = isObject(uiNode) ? { ...uiNode } : {};
-
-	if (isObject(schemaNode) && schemaNode.type === 'object' && isObject(schemaNode.properties)) {
-		Object.entries(schemaNode.properties).forEach(([propName, propSchema]) => {
-			next[propName] = applyImageUiEnhancements(propSchema, next[propName], context);
-		});
-	}
-
-	if (isObject(schemaNode) && schemaNode.type === 'array') {
-		const itemSchema = Array.isArray(schemaNode.items) ? schemaNode.items[0] : schemaNode.items;
-		next.items = applyImageUiEnhancements(itemSchema, next.items, context);
-	}
-
-	return next;
-}
-
-function findPolicyFileConfig(schemaNode, uiNode) {
-	// Finds policy file reference configuration from nested schema/uiSchema nodes.
-	if (!isObject(schemaNode)) return null;
-
-	if (schemaNode.type === 'array') {
-		const itemSchema = Array.isArray(schemaNode.items) ? schemaNode.items[0] : schemaNode.items;
-		const ownOptions = getUiOptions(uiNode);
-		const itemsUi = isObject(uiNode) ? uiNode.items : undefined;
-		const itemOptions = getUiOptions(itemsUi);
-		const policyFile = isObject(ownOptions.policyFile) ? ownOptions.policyFile : (isObject(itemOptions.policyFile) ? itemOptions.policyFile : null);
-		if (policyFile) {
-			return {
-				options: policyFile,
-				pattern: typeof itemSchema?.pattern === 'string' ? itemSchema.pattern : ''
-			};
-		}
-	}
-
-	if (schemaNode.type === 'object' && isObject(schemaNode.properties)) {
-		for (const [propName, propSchema] of Object.entries(schemaNode.properties)) {
-			const found = findPolicyFileConfig(propSchema, isObject(uiNode) ? uiNode[propName] : undefined);
-			if (found) return found;
-		}
-	}
-
-	if (schemaNode.type === 'array') {
-		const itemSchema = Array.isArray(schemaNode.items) ? schemaNode.items[0] : schemaNode.items;
-		return findPolicyFileConfig(itemSchema, isObject(uiNode) ? uiNode.items : undefined);
-	}
-
-	return null;
-}
-
 function App() {
 	// Root admin application component for loading, editing, validating, and saving configs.
 	const injectedDomainId = typeof window !== 'undefined' && typeof window.__SSBCONFIG_DOMAIN_ID__ === 'string'
@@ -402,12 +334,6 @@ function App() {
 		assetFileWidget: AssetFileWidget
 	}), []);
 
-	const policyFileConfig = useMemo(() => findPolicyFileConfig(imageSchema, imageUiSchema), [imageSchema, imageUiSchema]);
-	const policyChoices = useMemo(
-		() => buildPolicyChoices(policies, policyFileConfig?.options || {}, policyFileConfig?.pattern || ''),
-		[policies, policyFileConfig]
-	);
-
 	const customFields = useMemo(() => ({
 		collapsibleSection: CollapsibleSectionField,
 		CollapsibleSectionField: CollapsibleSectionField
@@ -417,10 +343,7 @@ function App() {
 		() => applyPolicyUiEnhancements(policiesUiSchema, { assetBasePath: domainPaths.assetsPath }),
 		[policiesUiSchema, domainPaths.assetsPath]
 	);
-	const effectiveImageUiSchema = useMemo(
-		() => applyImageUiEnhancements(imageSchema, imageUiSchema, { policyChoices }),
-		[imageSchema, imageUiSchema, policyChoices]
-	);
+	const imageTabUiSchema = imageUiSchema;
 
 	// Normalizes backend entries into a consistent local editing model.
 	const normalizeEntries = (entries, baseDir) => {
@@ -563,7 +486,7 @@ function App() {
 		const selected = isPolicies ? selectedPolicy : selectedImageconfig;
 		const setSelected = isPolicies ? setSelectedPolicy : setSelectedImageconfig;
 		const schema = isPolicies ? policiesSchema : imageSchema;
-		const uiSchema = isPolicies ? effectivePoliciesUiSchema : effectiveImageUiSchema;
+		const uiSchema = isPolicies ? effectivePoliciesUiSchema : imageTabUiSchema;
 		const labelPrefix = isPolicies ? 'Policy' : 'Imageconfig';
 
 		const selectedItem = items[selected] || null;
