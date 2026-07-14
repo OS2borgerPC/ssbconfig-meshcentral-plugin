@@ -326,7 +326,7 @@ function App() {
 	const [imageconfigs, setImageconfigs] = useState([]);
 	const [selectedPolicy, setSelectedPolicy] = useState(0);
 	const [selectedImageconfig, setSelectedImageconfig] = useState(0);
-	const [activeTab, setActiveTab] = useState('policies');
+	const [activeTab, setActiveTab] = useState('imageconfigs');
 	const [validationErrors, setValidationErrors] = useState([]);
 	const [commitMessage, setCommitMessage] = useState('Update policies/imageconfigs from MeshCentral');
 
@@ -542,9 +542,11 @@ function App() {
 						<Typography variant="body2" color="text.secondary">Select a file from the list.</Typography>
 					) : (
 						<Stack spacing={2}>
-							<Typography variant="caption" sx={{ fontFamily: 'monospace' }}>
-								{selectedItem.fileName}
-							</Typography>
+							{isPolicies ? (
+								<Typography variant="caption" sx={{ fontFamily: 'monospace' }}>
+									../policies/{selectedItem.fileName}
+								</Typography>
+							) : null}
 
 							<Form
 								schema={schema}
@@ -581,6 +583,10 @@ function App() {
 					</CardContent>
 				</Card>
 
+				<Alert severity={status.type === 'error' ? 'error' : status.type === 'success' ? 'success' : 'info'}>
+					<Typography variant="body2">{status.message}</Typography>
+				</Alert>
+
 				<Card>
 					<CardContent>
 						<Typography variant="h6" sx={{ mb: 2 }}>Save and commit to Github</Typography>
@@ -611,10 +617,6 @@ function App() {
 					</CardContent>
 				</Card>
 
-				<Alert severity={status.type === 'error' ? 'error' : status.type === 'success' ? 'success' : 'info'}>
-					<Typography variant="body2">{status.message}</Typography>
-				</Alert>
-
 				{validationErrors.length > 0 ? (
 					<Alert severity="error">
 						<Stack spacing={0.5}>
@@ -643,8 +645,8 @@ function App() {
 							variant="scrollable"
 							allowScrollButtonsMobile
 						>
-							<Tab value="policies" label="Policies" />
 							<Tab value="imageconfigs" label="Imageconfigs" />
+							<Tab value="policies" label="Policies" />
 						</Tabs>
 
 						<Box sx={{ mt: 2 }}>
