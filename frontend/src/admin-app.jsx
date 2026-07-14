@@ -544,24 +544,8 @@ function App() {
 						<Typography variant="body2" color="text.secondary">Select a file from the list.</Typography>
 					) : (
 						<Stack spacing={2}>
-							<TextField
-								fullWidth
-								label="File name"
-								value={selectedItem.fileName}
-								onChange={(event) => {
-									const nextFileName = sanitizeFileName(event.target.value);
-									const baseDir = isPolicies ? domainPaths.policiesPath : domainPaths.imageconfigsPath;
-									const updated = {
-										...selectedItem,
-										fileName: nextFileName,
-										path: joinRepoPath(baseDir, nextFileName)
-									};
-									setItems(updateEntry(items, selected, updated));
-								}}
-							/>
-
 							<Typography variant="caption" sx={{ fontFamily: 'monospace' }}>
-								{selectedItem.path}
+								{selectedItem.fileName}
 							</Typography>
 
 							<Form
