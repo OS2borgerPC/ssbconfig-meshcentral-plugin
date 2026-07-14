@@ -19,10 +19,12 @@ import {
 } from '@mui/material';
 
 function buildPluginUrl(query) {
+	// Builds the plugin endpoint URL used for all admin API calls.
 	return `./pluginadmin.ashx${query}`;
 }
 
 function normalizePath(input) {
+	// Normalizes path separators and trims leading/trailing slashes.
 	return String(input || '')
 		.replace(/\\/g, '/')
 		.replace(/^\/+/, '')
@@ -30,6 +32,7 @@ function normalizePath(input) {
 }
 
 function joinRepoPath(...parts) {
+	// Joins repository path segments after normalization.
 	return parts
 		.map((part) => normalizePath(part))
 		.filter(Boolean)
@@ -37,12 +40,14 @@ function joinRepoPath(...parts) {
 }
 
 function sanitizeFileName(name) {
+	// Replaces unsafe filename characters with dashes.
 	return String(name || '')
 		.replace(/[\\/]/g, '-')
 		.replace(/[^A-Za-z0-9._-]/g, '-');
 }
 
 function toBase64(buffer) {
+	// Encodes an ArrayBuffer as base64 in chunks to avoid call stack limits.
 	let binary = '';
 	const bytes = new Uint8Array(buffer);
 	const chunkSize = 0x8000;
@@ -54,6 +59,7 @@ function toBase64(buffer) {
 }
 
 function ensureUploadStore() {
+	// Initializes and returns the in-memory upload store on window.
 	if (!window.__SSBCONFIG_UPLOADS__ || typeof window.__SSBCONFIG_UPLOADS__ !== 'object') {
 		window.__SSBCONFIG_UPLOADS__ = {};
 	}
@@ -61,15 +67,18 @@ function ensureUploadStore() {
 }
 
 function collectUploadEntries() {
+	// Converts the upload store object into an API-friendly list.
 	const store = ensureUploadStore();
 	return Object.entries(store).map(([path, content]) => ({ path, content }));
 }
 
 function isObject(value) {
+	// Returns true only for plain object-like values.
 	return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function toRegex(pattern) {
+	// Safely compiles a regex pattern, returning null on invalid input.
 	if (typeof pattern !== 'string' || pattern.length === 0) return null;
 	try {
 		return new RegExp(pattern);
@@ -79,12 +88,14 @@ function toRegex(pattern) {
 }
 
 function matchesPattern(value, pattern) {
+	// Validates a value against a regex pattern when provided.
 	const regex = toRegex(pattern);
 	if (!regex) return true;
 	return regex.test(String(value || ''));
 }
 
 function resolveTemplatePath(template, fileName, fallbackPrefix) {
+	// Resolves a path template and substitutes filename placeholders.
 	const safeFileName = sanitizeFileName(fileName);
 	const rawTemplate = String(template || '').trim();
 	if (!rawTemplate) {
@@ -102,10 +113,12 @@ function resolveTemplatePath(template, fileName, fallbackPrefix) {
 }
 
 function getUiOptions(uiNode) {
+	// Extracts ui:options from an RJSF uiSchema node.
 	return isObject(uiNode) && isObject(uiNode['ui:options']) ? uiNode['ui:options'] : {};
 }
 
 async function parseApiResponse(response) {
+	// Parses API responses and falls back to raw text errors.
 	const raw = await response.text();
 	if (!raw) return {};
 	try {
@@ -116,6 +129,7 @@ async function parseApiResponse(response) {
 }
 
 function buildPolicyChoices(policies, policyFileOptions = {}, policyPattern = '') {
+	// Builds policy dropdown choices filtered by optional pattern matching.
 	return (Array.isArray(policies) ? policies : []).map((entry) => {
 		const data = entry && typeof entry.content === 'object' ? entry.content : {};
 		const fileName = String(entry?.path || '').split('/').pop() || 'policy.yml';
@@ -132,6 +146,7 @@ function buildPolicyChoices(policies, policyFileOptions = {}, policyPattern = ''
 }
 
 function AssetFileWidget(props) {
+	// RJSF custom widget that uploads a file and writes an asset path to the form.
 	const { value, onChange, options = {}, label, id, required, schema = {}, rawErrors = [] } = props;
 	const accept = options.accept || '*/*';
 	const assetBasePath = normalizePath(options.assetBasePath || 'config/default/assets');
@@ -188,11 +203,13 @@ function AssetFileWidget(props) {
 }
 
 function readCollapsibleOptions(uiSchema) {
+	// Reads collapsible section options from ui:options.
 	const options = uiSchema && typeof uiSchema === 'object' ? uiSchema['ui:options'] : null;
 	return options && typeof options === 'object' ? options : {};
 }
 
 function CollapsibleSectionField(props) {
+	// Renders object sections as optional collapsible UI blocks.
 	const {
 		idSchema,
 		schema = {},
@@ -266,12 +283,14 @@ function CollapsibleSectionField(props) {
 }
 
 function listItemLabel(entry, fallbackPrefix, index) {
+	// Chooses the display label for policy/imageconfig list entries.
 	const content = entry && typeof entry.content === 'object' ? entry.content : {};
 	if (typeof content.name === 'string' && content.name.trim()) return content.name.trim();
 	return entry?.fileName || `${fallbackPrefix} ${index + 1}`;
 }
 
 function applyPolicyUiEnhancements(uiNode, context) {
+	// Recursively applies policy-specific uiSchema widget enhancements.
 	if (Array.isArray(uiNode)) {
 		return uiNode.map((entry) => applyPolicyUiEnhancements(entry, context));
 	}
@@ -301,6 +320,7 @@ function applyPolicyUiEnhancements(uiNode, context) {
 }
 
 function applyImageUiEnhancements(schemaNode, uiNode, context) {
+	// Recursively prepares image uiSchema structure to mirror schema shape.
 	const next = isObject(uiNode) ? { ...uiNode } : {};
 
 	if (isObject(schemaNode) && schemaNode.type === 'object' && isObject(schemaNode.properties)) {
@@ -318,6 +338,7 @@ function applyImageUiEnhancements(schemaNode, uiNode, context) {
 }
 
 function findPolicyFileConfig(schemaNode, uiNode) {
+	// Finds policy file reference configuration from nested schema/uiSchema nodes.
 	if (!isObject(schemaNode)) return null;
 
 	if (schemaNode.type === 'array') {
@@ -350,6 +371,7 @@ function findPolicyFileConfig(schemaNode, uiNode) {
 }
 
 function App() {
+	// Root admin application component for loading, editing, validating, and saving configs.
 	const injectedDomainId = typeof window !== 'undefined' && typeof window.__SSBCONFIG_DOMAIN_ID__ === 'string'
 		? window.__SSBCONFIG_DOMAIN_ID__
 		: '';
@@ -400,6 +422,7 @@ function App() {
 		[imageSchema, imageUiSchema, policyChoices]
 	);
 
+	// Normalizes backend entries into a consistent local editing model.
 	const normalizeEntries = (entries, baseDir) => {
 		const list = Array.isArray(entries) ? entries : [];
 		return list.map((entry, index) => {
@@ -414,6 +437,7 @@ function App() {
 	};
 
 	async function fetchBootstrap() {
+		// Loads schemas and domain files from the backend bootstrap endpoint.
 		setLoading(true);
 		setStatus({ type: 'info', message: 'Loading data from GitHub...' });
 
@@ -459,12 +483,14 @@ function App() {
 	}, []);
 
 	function updateEntry(list, index, nextEntry) {
+		// Replaces a single entry by index in an immutable way.
 		const next = [...list];
 		next[index] = nextEntry;
 		return next;
 	}
 
 	function createNewEntry(type) {
+		// Creates a new unsaved policy or imageconfig entry scaffold.
 		const baseDir = type === 'policies' ? domainPaths.policiesPath : domainPaths.imageconfigsPath;
 		const now = Date.now();
 		const fileName = `${type === 'policies' ? 'policy' : 'imageconfig'}-${now}.yml`;
@@ -477,6 +503,7 @@ function App() {
 	}
 
 	async function runPreviewOrSave(api) {
+		// Sends preview or save requests and updates validation/commit status.
 		const body = {
 			policies: policies.map((entry) => ({ path: entry.path, content: entry.content })),
 			imageconfigs: imageconfigs.map((entry) => ({ path: entry.path, content: entry.content })),
@@ -529,6 +556,7 @@ function App() {
 	}
 
 	function renderEditorTab(type) {
+		// Renders the list and form editor for either policies or imageconfigs.
 		const isPolicies = type === 'policies';
 		const items = isPolicies ? policies : imageconfigs;
 		const setItems = isPolicies ? setPolicies : setImageconfigs;
@@ -747,6 +775,7 @@ function App() {
 
 const rootNode = document.getElementById('ssbconfig-root');
 if (rootNode) {
+	// Mounts the React app into the plugin admin root element.
 	const root = createRoot(rootNode);
 	root.render(<App />);
 }
