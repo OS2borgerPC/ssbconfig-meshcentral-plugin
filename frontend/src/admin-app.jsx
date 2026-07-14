@@ -11,7 +11,6 @@ import {
 	List,
 	ListItemButton,
 	ListItemText,
-	MenuItem,
 	Stack,
 	Tab,
 	Tabs,
@@ -188,56 +187,6 @@ function AssetFileWidget(props) {
 	);
 }
 
-function PolicyReferenceField(props) {
-	const { formData, onChange, uiSchema = {}, label, required, readonly, disabled, rawErrors = [], schema = {} } = props;
-	const options = uiSchema['ui:options'] || {};
-	const choices = Array.isArray(options.policies) ? options.policies : [];
-	const allowedPaths = new Set(choices.map((entry) => entry.path));
-	const pattern = typeof options.policyPattern === 'string' ? options.policyPattern : schema?.items?.pattern;
-
-	const byPath = new Map(choices.map((entry) => [entry.path, entry.name]));
-	const selected = Array.isArray(formData) ? formData.filter((v) => typeof v === 'string' && v.length > 0) : [];
-	const invalidSelected = selected.filter((item) => !matchesPattern(item, pattern));
-
-	return (
-		<TextField
-			select
-			fullWidth
-			size="small"
-			label={label || 'Policies'}
-			required={required}
-			value={selected}
-			disabled={Boolean(readonly || disabled)}
-			onChange={(event) => {
-				const raw = event.target.value;
-				const next = (Array.isArray(raw) ? raw : String(raw || '').split(',').filter(Boolean)).filter((item) => allowedPaths.has(item));
-				onChange(next);
-			}}
-			SelectProps={{
-				multiple: true,
-				renderValue: (selectedValues) => {
-					const values = Array.isArray(selectedValues) ? selectedValues : [];
-					if (!values.length) return 'Select policies';
-					return values.map((item) => byPath.get(item) || item).join(', ');
-				}
-			}}
-			helperText={
-				invalidSelected.length > 0
-					? `Some selected values do not match schema pattern: ${pattern}`
-					: (rawErrors.length > 0 ? rawErrors[0] : 'Selected policy names are displayed, but policy file paths are stored.')
-			}
-			sx={{ mb: 2 }}
-		>
-			{choices.map((entry) => (
-				<MenuItem key={entry.path} value={entry.path}>{entry.name}</MenuItem>
-			))}
-			{selected.filter((pathValue) => !byPath.has(pathValue)).map((pathValue) => (
-				<MenuItem key={`missing-${pathValue}`} value={pathValue}>Missing: {pathValue}</MenuItem>
-			))}
-		</TextField>
-	);
-}
-
 function readCollapsibleOptions(uiSchema) {
 	const options = uiSchema && typeof uiSchema === 'object' ? uiSchema['ui:options'] : null;
 	return options && typeof options === 'object' ? options : {};
@@ -363,19 +312,6 @@ function applyImageUiEnhancements(schemaNode, uiNode, context) {
 	if (isObject(schemaNode) && schemaNode.type === 'array') {
 		const itemSchema = Array.isArray(schemaNode.items) ? schemaNode.items[0] : schemaNode.items;
 		next.items = applyImageUiEnhancements(itemSchema, next.items, context);
-
-		const ownOptions = getUiOptions(next);
-		const itemOptions = getUiOptions(next.items);
-		const policyFile = isObject(ownOptions.policyFile) ? ownOptions.policyFile : (isObject(itemOptions.policyFile) ? itemOptions.policyFile : null);
-
-		if (policyFile) {
-			next['ui:field'] = 'policyReferenceSelect';
-			next['ui:options'] = {
-				...ownOptions,
-				policies: context.policyChoices,
-				policyPattern: typeof itemSchema?.pattern === 'string' ? itemSchema.pattern : ''
-			};
-		}
 	}
 
 	return next;
@@ -451,7 +387,6 @@ function App() {
 	);
 
 	const customFields = useMemo(() => ({
-		policyReferenceSelect: PolicyReferenceField,
 		collapsibleSection: CollapsibleSectionField,
 		CollapsibleSectionField: CollapsibleSectionField
 	}), []);
