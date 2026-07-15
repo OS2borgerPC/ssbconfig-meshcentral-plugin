@@ -252,6 +252,14 @@ module.exports.ssbconfig = function (parent) {
     return result;
   }
 
+  // Lists config file paths under a directory without parsing file contents.
+  async function listConfigFilePaths(settings, branch, dirPath) {
+    const listing = await githubGetDirectory(settings, settings.configRepoOwner, settings.configRepoName, dirPath, branch);
+    return listing
+      .filter((item) => item && item.type === "file" && isConfigFilePath(item.path))
+      .map((item) => normalizePath(item.path));
+  }
+
   // Chooses a human-friendly policy display name from file content.
   function extractPolicyDisplayName(entry) {
     if (!entry || typeof entry !== "object") return "";
@@ -451,6 +459,10 @@ module.exports.ssbconfig = function (parent) {
     const domainPaths = getDomainPaths(settings, domainId);
 
     const schemas = await getSchemasAndUi(settings, branch);
+    const [existingPolicyPaths, existingImageconfigPaths] = await Promise.all([
+      listConfigFilePaths(settings, branch, domainPaths.policiesPath),
+      listConfigFilePaths(settings, branch, domainPaths.imageconfigsPath)
+    ]);
     const policyValidate = createValidator(schemas.policiesSchema);
     const imageValidate = createValidator(schemas.imageconfigsSchema);
 
@@ -461,10 +473,13 @@ module.exports.ssbconfig = function (parent) {
     const validationErrors = [];
     const fileChanges = [];
     const createdImageconfigs = [];
+    const submittedPolicyPaths = new Set();
+    const submittedImageconfigPaths = new Set();
 
     for (const file of policies) {
       if (!file || typeof file.path !== "string") continue;
       const safePath = ensurePathUnder(domainPaths.policiesPath, file.path, "policy");
+      submittedPolicyPaths.add(safePath);
       const sourceContent = (file.content && typeof file.content === "object") ? file.content : {};
       const sanitizedContent = sanitizeForConfig(sourceContent);
       const content = (sanitizedContent && typeof sanitizedContent === "object") ? sanitizedContent : {};
@@ -487,6 +502,7 @@ module.exports.ssbconfig = function (parent) {
     for (const file of imageconfigs) {
       if (!file || typeof file.path !== "string") continue;
       const safePath = ensurePathUnder(domainPaths.imageconfigsPath, file.path, "imageconfig");
+      submittedImageconfigPaths.add(safePath);
       const incomingSha = (typeof file.sha === "string") ? file.sha.trim() : "";
       const sourceContent = (file.content && typeof file.content === "object") ? file.content : {};
       const sanitizedContent = sanitizeForConfig(sourceContent);
@@ -511,6 +527,24 @@ module.exports.ssbconfig = function (parent) {
           path: safePath,
           groupName: extractImageconfigGroupName(safePath, content),
           imageId: extractImageId(content)
+        });
+      }
+    }
+
+    for (const existingPath of existingPolicyPaths) {
+      if (!submittedPolicyPaths.has(existingPath)) {
+        fileChanges.push({
+          path: existingPath,
+          delete: true
+        });
+      }
+    }
+
+    for (const existingPath of existingImageconfigPaths) {
+      if (!submittedImageconfigPaths.has(existingPath)) {
+        fileChanges.push({
+          path: existingPath,
+          delete: true
         });
       }
     }
@@ -809,6 +843,16 @@ module.exports.ssbconfig = function (parent) {
     const treeEntries = [];
 
     for (const change of fileChanges) {
+      if (change.delete === true) {
+        treeEntries.push({
+          path: normalizePath(change.path),
+          mode: "100644",
+          type: "blob",
+          sha: null
+        });
+        continue;
+      }
+
       const blob = await githubRequest(
         settings,
         "POST",
