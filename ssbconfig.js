@@ -3,6 +3,7 @@
 const fs = require("fs");
 const https = require("https");
 const path = require("path");
+const crypto = require("crypto");
 const yaml = require("yaml");
 const Ajv = require("ajv");
 
@@ -260,6 +261,27 @@ module.exports.ssbconfig = function (parent) {
     return path.basename(entry.path || "");
   }
 
+  // Chooses a device group name for imageconfig-derived MeshCentral groups.
+  function extractImageconfigGroupName(filePath, content) {
+    const data = (content && typeof content === "object") ? content : {};
+    if (typeof data.name === "string" && data.name.trim().length > 0) return data.name.trim();
+    if (typeof data.title === "string" && data.title.trim().length > 0) return data.title.trim();
+    return path.basename(filePath || "imageconfig").replace(/\.[^.]+$/, "");
+  }
+
+  // Extracts image_id from imageconfig payload using common key variations.
+  function extractImageId(content) {
+    const data = (content && typeof content === "object") ? content : {};
+    const candidates = [data.image_id, data.imageId, data.imageID];
+    for (const value of candidates) {
+      if (value !== null && value !== undefined) {
+        const text = String(value).trim();
+        if (text.length > 0) return text;
+      }
+    }
+    return "";
+  }
+
   // Downloads and parses both schema and uiSchema documents for policies and imageconfigs.
   async function getSchemasAndUi(settings, branch) {
     const policySchemaRaw = await githubGetFileContent(
@@ -438,6 +460,7 @@ module.exports.ssbconfig = function (parent) {
 
     const validationErrors = [];
     const fileChanges = [];
+    const createdImageconfigs = [];
 
     for (const file of policies) {
       if (!file || typeof file.path !== "string") continue;
@@ -464,6 +487,7 @@ module.exports.ssbconfig = function (parent) {
     for (const file of imageconfigs) {
       if (!file || typeof file.path !== "string") continue;
       const safePath = ensurePathUnder(domainPaths.imageconfigsPath, file.path, "imageconfig");
+      const incomingSha = (typeof file.sha === "string") ? file.sha.trim() : "";
       const sourceContent = (file.content && typeof file.content === "object") ? file.content : {};
       const sanitizedContent = sanitizeForConfig(sourceContent);
       const content = (sanitizedContent && typeof sanitizedContent === "object") ? sanitizedContent : {};
@@ -481,6 +505,14 @@ module.exports.ssbconfig = function (parent) {
         path: safePath,
         contentUtf8: stringifyConfigFile(safePath, content)
       });
+
+      if (!incomingSha) {
+        createdImageconfigs.push({
+          path: safePath,
+          groupName: extractImageconfigGroupName(safePath, content),
+          imageId: extractImageId(content)
+        });
+      }
     }
 
     for (const asset of assets) {
@@ -500,10 +532,134 @@ module.exports.ssbconfig = function (parent) {
       domainPaths,
       validationErrors,
       fileChanges,
+      createdImageconfigs,
       commitMessage: (body && typeof body.commitMessage === "string" && body.commitMessage.trim())
         ? body.commitMessage.trim()
         : "Update domain config from MeshCentral"
     };
+  }
+
+  // Creates or updates a MeshCentral device group for each newly created imageconfig.
+  function buildAdminMeshLinks(user) {
+    const links = {};
+    if (user && typeof user._id === "string" && user._id.length > 0) {
+      links[user._id] = {
+        name: (typeof user.name === "string" && user.name.trim().length > 0) ? user.name.trim() : "MeshCentral Admin",
+        rights: 0xFFFFFFFF
+      };
+    }
+    return links;
+  }
+
+  function ensureUserMeshLink(db, meshServer, user, meshId) {
+    if (!user || typeof user._id !== "string" || !meshId) return false;
+
+    user.links = (user.links && typeof user.links === "object") ? user.links : {};
+    const encodedMeshId = encodeURIComponent(meshId);
+    user.links[encodedMeshId] = {
+      rights: 0xFFFFFFFF
+    };
+    db.Set(user);
+
+    if (meshServer && meshServer.users && typeof meshServer.users === "object") {
+      meshServer.users[user._id] = user;
+    }
+    return true;
+  }
+
+  async function syncCreatedImageconfigGroups(domainId, createdImageconfigs, user) {
+    const outcome = {
+      created: 0,
+      updated: 0,
+      warnings: []
+    };
+
+    const items = Array.isArray(createdImageconfigs) ? createdImageconfigs : [];
+    obj.debug("plugin:ssbconfig", `group sync start: domain=${domainId || "default"}, items=${items.length}`);
+    if (items.length === 0) return outcome;
+
+    const meshServer = obj.meshServer;
+    const db = meshServer && meshServer.db;
+    if (!db || typeof db.Set !== "function") {
+      outcome.warnings.push("MeshCentral DB API unavailable; skipped device-group sync.");
+      obj.debug("plugin:ssbconfig", "group sync skipped: MeshCentral DB API unavailable");
+      return outcome;
+    }
+
+    const meshes = (meshServer && meshServer.meshes && typeof meshServer.meshes === "object") ? meshServer.meshes : {};
+    const adminLinks = buildAdminMeshLinks(user);
+    const creatorId = (user && typeof user._id === "string") ? user._id : "";
+    const creatorName = (user && typeof user.name === "string" && user.name.trim().length > 0) ? user.name.trim() : "MeshCentral Admin";
+
+    for (const item of items) {
+      const groupName = String(item && item.groupName ? item.groupName : "").trim();
+      if (!groupName) {
+        outcome.warnings.push(`Skipped group creation for ${item && item.path ? item.path : "imageconfig"}: missing name.`);
+        obj.debug("plugin:ssbconfig", `group sync skip: missing groupName for ${item && item.path ? item.path : "imageconfig"}`);
+        continue;
+      }
+
+      try {
+        let existing = null;
+        for (const mesh of Object.values(meshes)) {
+          if (!mesh || typeof mesh !== "object") continue;
+          if (mesh.domain === domainId && String(mesh.name || "") === groupName) {
+            existing = mesh;
+            break;
+          }
+        }
+
+        const imageId = String(item && item.imageId ? item.imageId : "").trim();
+
+        if (existing) {
+          existing.links = (existing.links && typeof existing.links === "object") ? existing.links : {};
+          Object.assign(existing.links, adminLinks);
+          if (imageId) {
+            existing.tags = (existing.tags && typeof existing.tags === "object") ? existing.tags : {};
+            existing.tags.image_id = imageId;
+            existing.image_id = imageId;
+          }
+          db.Set(existing);
+          ensureUserMeshLink(db, meshServer, user, existing._id);
+          outcome.updated += 1;
+          obj.debug("plugin:ssbconfig", `group sync updated: domain=${domainId || "default"}, group=${groupName}, id=${existing._id || "unknown"}`);
+          continue;
+        }
+
+        const meshId = `mesh/${domainId}/${crypto.randomBytes(9).toString("base64").replace(/\+/g, "@").replace(/\//g, "$")}`;
+        const mesh = {
+          _id: meshId,
+          type: "mesh",
+          mtype: 2,
+          name: groupName,
+          domain: domainId,
+          links: { ...adminLinks },
+          creation: Date.now(),
+          creatorid: creatorId,
+          creatorname: creatorName
+        };
+
+        if (imageId) {
+          mesh.tags = { image_id: imageId };
+          mesh.image_id = imageId;
+        }
+
+        db.Set(mesh);
+        ensureUserMeshLink(db, meshServer, user, meshId);
+        if (meshServer && meshServer.meshes && typeof meshServer.meshes === "object") {
+          meshServer.meshes[meshId] = mesh;
+        }
+
+        outcome.created += 1;
+        obj.debug("plugin:ssbconfig", `group sync created: domain=${domainId || "default"}, group=${groupName}, id=${meshId}`);
+      } catch (error) {
+        outcome.warnings.push(`Failed to sync device group for ${item && item.path ? item.path : "imageconfig"}: ${error.message || error}`);
+        obj.debug("plugin:ssbconfig", "group sync failed", error);
+      }
+    }
+
+    obj.debug("plugin:ssbconfig", `group sync done: created=${outcome.created}, updated=${outcome.updated}, warnings=${outcome.warnings.length}`);
+    return outcome;
   }
 
   // Validates and commits file changes to GitHub when there are no validation errors.
@@ -533,13 +689,16 @@ module.exports.ssbconfig = function (parent) {
       (user && user.name) ? user.name : "MeshCentral Admin"
     );
 
+    const groupSync = await syncCreatedImageconfigGroups(prepared.domainId, prepared.createdImageconfigs, user);
+
     return {
       ok: true,
       branch: prepared.branch,
       domainId: prepared.domainId,
       changedFiles: prepared.fileChanges.map((f) => f.path),
       validationErrors: [],
-      commitSha: result.commitSha
+      commitSha: result.commitSha,
+      groupSync
     };
   }
 

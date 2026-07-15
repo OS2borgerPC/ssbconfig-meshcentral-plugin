@@ -430,7 +430,7 @@ function App() {
 		// Sends save request and updates validation/commit status.
 		const body = {
 			policies: policies.map((entry) => ({ path: entry.path, content: entry.content })),
-			imageconfigs: imageconfigs.map((entry) => ({ path: entry.path, content: entry.content })),
+			imageconfigs: imageconfigs.map((entry) => ({ path: entry.path, sha: entry.sha, content: entry.content })),
 			assets: collectUploadEntries(),
 			commitMessage
 		};
@@ -461,9 +461,16 @@ function App() {
 			}
 
 			if (payload.commitSha) {
+				const groupSync = (payload.groupSync && typeof payload.groupSync === 'object') ? payload.groupSync : null;
+				const createdCount = groupSync && Number.isFinite(groupSync.created) ? groupSync.created : 0;
+				const updatedCount = groupSync && Number.isFinite(groupSync.updated) ? groupSync.updated : 0;
+				const warningCount = groupSync && Array.isArray(groupSync.warnings) ? groupSync.warnings.length : 0;
+				const groupSyncText = groupSync
+					? ` Device groups: ${createdCount} created, ${updatedCount} updated${warningCount > 0 ? `, ${warningCount} warning(s)` : ''}.`
+					: '';
 				setStatus({
 					type: 'success',
-					message: `Committed ${payload.changedFiles ? payload.changedFiles.length : 0} file(s) to ${payload.branch}. Commit: ${payload.commitSha}`
+					message: `Committed ${payload.changedFiles ? payload.changedFiles.length : 0} file(s) to ${payload.branch}. Commit: ${payload.commitSha}.${groupSyncText}`
 				});
 				window.__SSBCONFIG_UPLOADS__ = {};
 			} else {
