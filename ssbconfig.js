@@ -30,6 +30,12 @@ module.exports.ssbconfig = function (parent) {
   });
   const meshcentralService = createMeshcentralService(obj.meshServer, obj.debug);
 
+  function canAccessPlugin(req, user) {
+    if (user && user.siteadmin) return true;
+    const domainId = configService.resolveRequestDomainId(req, user);
+    return meshcentralService.isUserInOs2Group(obj.meshServer, user, domainId);
+  }
+
   // Logs plugin startup for operational visibility in MeshCentral logs.
   obj.server_startup = function () {
     obj.debug("plugin:ssbconfig", "plugin started!!!");
@@ -38,7 +44,7 @@ module.exports.ssbconfig = function (parent) {
 
   // Handles admin GET routes: bundle asset serving, bootstrap payload, and main admin view.
   obj.handleAdminReq = async function (req, res, user) {
-    if (!user || !user.siteadmin) {
+    if (!canAccessPlugin(req, user)) {
       res.status(403).send("Forbidden");
       return;
     }
@@ -82,7 +88,7 @@ module.exports.ssbconfig = function (parent) {
 
   // Handles admin POST routes for preview validation and save/commit operations.
   obj.handleAdminPostReq = async function (req, res, user) {
-    if (!user || !user.siteadmin) {
+    if (!canAccessPlugin(req, user)) {
       res.status(403).send("Forbidden");
       return;
     }
