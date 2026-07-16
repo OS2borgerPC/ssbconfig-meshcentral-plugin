@@ -4,6 +4,7 @@ const fs = require("fs");
 const https = require("https");
 const path = require("path");
 const crypto = require("crypto");
+const util = require("util");
 const yaml = require("yaml");
 const Ajv = require("ajv");
 
@@ -16,8 +17,49 @@ module.exports.ssbconfig = function (parent) {
 
   // Logs plugin startup for operational visibility in MeshCentral logs.
   obj.server_startup = function () {
-    obj.debug("plugin:ssbconfig", "plugin started");
+    obj.debug("plugin:ssbconfig", "plugin started!!!");
+    ensureOs2UserGroupOnStartup();
   };
+
+  function ensureOs2UserGroupOnStartup() {
+    const meshServer = obj.meshServer;
+    const db = meshServer && meshServer.db;
+    if (!db || typeof db.Set !== "function") {
+      obj.debug("plugin:ssbconfig", "OS2 init: MeshCentral DB API unavailable; cannot create user group.");
+      return;
+    }
+
+    const domains = (meshServer.config && meshServer.config.domains && typeof meshServer.config.domains === "object")
+      ? Object.keys(meshServer.config.domains)
+      : [];
+    if (domains.indexOf("") < 0) domains.unshift("");
+
+    const groups = (meshServer.userGroups && typeof meshServer.userGroups === "object") ? meshServer.userGroups : {};
+    if (!meshServer.userGroups || typeof meshServer.userGroups !== "object") {
+      meshServer.userGroups = {};
+    }
+
+    for (const domainId of domains) {
+      const exists = Object.values(groups).some((group) => {
+        return group && typeof group === "object" && group.domain === domainId && String(group.name || "") === "OS2";
+      });
+      if (exists) continue;
+
+      const groupId = `ugrp/${domainId}/${crypto.randomBytes(9).toString("base64").replace(/\+/g, "@").replace(/\//g, "$")}`;
+      const userGroup = {
+        _id: groupId,
+        type: "ugrp",
+        domain: domainId,
+        name: "OS2",
+        creation: Date.now(),
+        links: {}
+      };
+
+      db.Set(userGroup);
+      meshServer.userGroups[groupId] = userGroup;
+      obj.debug("plugin:ssbconfig", `OS2 init: created user group in domain \"${domainId || "default"}\".`);
+    }
+  }
 
   // Handles admin GET routes: bundle asset serving, bootstrap payload, and main admin view.
   obj.handleAdminReq = async function (req, res, user) {
@@ -503,6 +545,7 @@ module.exports.ssbconfig = function (parent) {
       if (!file || typeof file.path !== "string") continue;
       const safePath = ensurePathUnder(domainPaths.imageconfigsPath, file.path, "imageconfig");
       submittedImageconfigPaths.add(safePath);
+      // Existing files include a sha from bootstrap; empty sha means this entry is newly created.
       const incomingSha = (typeof file.sha === "string") ? file.sha.trim() : "";
       const sourceContent = (file.content && typeof file.content === "object") ? file.content : {};
       const sanitizedContent = sanitizeForConfig(sourceContent);
@@ -522,6 +565,7 @@ module.exports.ssbconfig = function (parent) {
         contentUtf8: stringifyConfigFile(safePath, content)
       });
 
+      // Only brand-new imageconfigs trigger automatic MeshCentral device-group sync.
       if (!incomingSha) {
         createdImageconfigs.push({
           path: safePath,
@@ -588,6 +632,7 @@ module.exports.ssbconfig = function (parent) {
   function ensureUserMeshLink(db, meshServer, user, meshId) {
     if (!user || typeof user._id !== "string" || !meshId) return false;
 
+    // User.links keys are URL-encoded mesh IDs in MeshCentral's data model.
     user.links = (user.links && typeof user.links === "object") ? user.links : {};
     const encodedMeshId = encodeURIComponent(meshId);
     user.links[encodedMeshId] = {
@@ -624,6 +669,7 @@ module.exports.ssbconfig = function (parent) {
     const adminLinks = buildAdminMeshLinks(user);
     const creatorId = (user && typeof user._id === "string") ? user._id : "";
     const creatorName = (user && typeof user.name === "string" && user.name.trim().length > 0) ? user.name.trim() : "MeshCentral Admin";
+    obj.debug("plugin:ssbconfig", `group sync creator: id=${creatorId || "(empty)"}, name=${creatorName}`);
 
     for (const item of items) {
       const groupName = String(item && item.groupName ? item.groupName : "").trim();
@@ -645,6 +691,7 @@ module.exports.ssbconfig = function (parent) {
 
         const imageId = String(item && item.imageId ? item.imageId : "").trim();
 
+        // Reuse an existing domain group with matching name to keep IDs stable.
         if (existing) {
           existing.links = (existing.links && typeof existing.links === "object") ? existing.links : {};
           Object.assign(existing.links, adminLinks);
@@ -660,6 +707,7 @@ module.exports.ssbconfig = function (parent) {
           continue;
         }
 
+        // Otherwise create a new mesh group and tag it with image_id when available.
         const meshId = `mesh/${domainId}/${crypto.randomBytes(9).toString("base64").replace(/\+/g, "@").replace(/\//g, "$")}`;
         const mesh = {
           _id: meshId,
@@ -723,6 +771,7 @@ module.exports.ssbconfig = function (parent) {
       (user && user.name) ? user.name : "MeshCentral Admin"
     );
 
+    // Group sync runs only after the GitHub commit succeeds, so repo is source-of-truth.
     const groupSync = await syncCreatedImageconfigGroups(prepared.domainId, prepared.createdImageconfigs, user);
 
     return {
