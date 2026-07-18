@@ -39,7 +39,7 @@ module.exports.ssbconfig = function (parent) {
   // Logs plugin startup for operational visibility in MeshCentral logs.
   obj.server_startup = function () {
     obj.debug("plugin:ssbconfig", "plugin started!!!");
-    meshcentralService.ensureOs2UserGroupOnStartup();
+    obj.debug("plugin:ssbconfig", "OS2 init: startup mutation disabled to avoid overwriting existing group links.");
   };
 
   // Handles admin GET routes: bundle asset serving, bootstrap payload, and main admin view.
