@@ -29,6 +29,8 @@ module.exports.ssbconfig = function (parent) {
     }
   });
   const meshcentralService = createMeshcentralService(obj.meshServer, obj.debug);
+  const devicePluginTabHooks = meshcentralService.createDevicePluginTabHooks();
+  obj.exports = devicePluginTabHooks.exports;
 
   function canAccessPlugin(req, user) {
     if (user && user.siteadmin) return true;
@@ -41,6 +43,10 @@ module.exports.ssbconfig = function (parent) {
     obj.debug("plugin:ssbconfig", "plugin started!!!");
     obj.debug("plugin:ssbconfig", "OS2 init: startup mutation disabled to avoid overwriting existing group links.");
   };
+
+  // Registers a visible device Plugins tab in the web UI and keeps it across device refreshes.
+  obj.onWebUIStartupEnd = devicePluginTabHooks.onWebUIStartupEnd;
+  obj.onDeviceRefreshEnd = devicePluginTabHooks.onDeviceRefreshEnd;
 
   // Handles admin GET routes: bundle asset serving, bootstrap payload, and main admin view.
   obj.handleAdminReq = async function (req, res, user) {
