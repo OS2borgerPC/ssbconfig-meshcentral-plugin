@@ -109,6 +109,13 @@ module.exports.ssbconfig = function (parent) {
         return;
       }
 
+      if (api === "move-device") {
+        const domainId = configService.resolveRequestDomainId(req, user);
+        const result = await meshcentralService.moveDeviceByPolicy(domainId, user, body);
+        sendJson(res, result.ok ? 200 : 400, result);
+        return;
+      }
+
       res.sendStatus(404);
     } catch (error) {
       obj.debug("plugin:ssbconfig", "handleAdminPostReq error", error);
