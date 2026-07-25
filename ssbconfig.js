@@ -138,6 +138,16 @@ module.exports.ssbconfig = function (parent) {
       };
     }
 
+    // Create or reuse device groups before commit so their mesh IDs can be embedded in new imageconfigs.
+    const groupSync = await meshcentralService.syncCreatedImageconfigGroups(prepared.domainId, prepared.createdImageconfigs, user);
+    const imageIdPatch = configService.applyImageIdMappingsToFileChanges(
+      prepared.fileChanges,
+      groupSync && groupSync.imageconfigMeshLinks
+    );
+    if (imageIdPatch.warnings.length > 0) {
+      groupSync.warnings = groupSync.warnings.concat(imageIdPatch.warnings);
+    }
+
     const result = await githubCommitFiles(
       prepared.settings,
       {
@@ -149,9 +159,6 @@ module.exports.ssbconfig = function (parent) {
       prepared.commitMessage,
       (user && user.name) ? user.name : "MeshCentral Admin"
     );
-
-    // Group sync runs only after the GitHub commit succeeds, so repo is source-of-truth.
-    const groupSync = await meshcentralService.syncCreatedImageconfigGroups(prepared.domainId, prepared.createdImageconfigs, user);
 
     return {
       ok: true,
