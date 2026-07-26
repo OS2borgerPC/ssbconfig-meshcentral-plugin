@@ -138,6 +138,33 @@ module.exports.ssbconfig = function (parent) {
       };
     }
 
+    // Delete matching device groups for removed imageconfigs before any commit.
+    const deletedGroupSync = await meshcentralService.syncDeletedImageconfigGroups(
+      prepared.domainId,
+      prepared.deletedImageconfigs
+    );
+
+    if (Array.isArray(deletedGroupSync.blocked) && deletedGroupSync.blocked.length > 0) {
+      const first = deletedGroupSync.blocked[0];
+      const groupLabel = first.meshName || first.meshId || "matching device group";
+      const details = deletedGroupSync.blocked.map((entry) => {
+        const label = entry.imageconfigName || entry.path || "imageconfig";
+        const countInfo = Number.isFinite(entry.deviceCount) ? ` (${entry.deviceCount} device${entry.deviceCount === 1 ? "" : "s"})` : "";
+        return `${label} -> ${entry.meshName || entry.meshId}${countInfo}: ${entry.reason || "blocked"}`;
+      });
+
+      return {
+        ok: false,
+        branch: prepared.branch,
+        domainId: prepared.domainId,
+        changedFiles: prepared.fileChanges.map((f) => f.path),
+        validationErrors: [],
+        deletedGroupSync,
+        error: `Cannot delete imageconfig because ${groupLabel} must be empty before deletion. Empty the corresponding device group and try again.`,
+        details
+      };
+    }
+
     // Create or reuse device groups before commit so their mesh IDs can be embedded in new imageconfigs.
     const groupSync = await meshcentralService.syncCreatedImageconfigGroups(prepared.domainId, prepared.createdImageconfigs, user);
     const imageIdPatch = configService.applyImageIdMappingsToFileChanges(
@@ -167,7 +194,8 @@ module.exports.ssbconfig = function (parent) {
       changedFiles: prepared.fileChanges.map((f) => f.path),
       validationErrors: [],
       commitSha: result.commitSha,
-      groupSync
+      groupSync,
+      deletedGroupSync
     };
   }
 

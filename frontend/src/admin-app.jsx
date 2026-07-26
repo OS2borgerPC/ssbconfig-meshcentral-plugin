@@ -452,6 +452,20 @@ function App() {
 			const errors = Array.isArray(payload.validationErrors) ? payload.validationErrors : [];
 			setValidationErrors(errors);
 
+			if (payload && payload.ok === false) {
+				if (errors.length > 0) {
+					setStatus({
+						type: 'error',
+						message: `Validation failed with ${errors.length} file-level error(s).`
+					});
+					return;
+				}
+
+				const detailList = Array.isArray(payload.details) ? payload.details.filter((entry) => typeof entry === 'string' && entry.trim().length > 0) : [];
+				const detailSuffix = detailList.length > 0 ? ` ${detailList.join(' ')}` : '';
+				throw new Error(`${payload.error || 'Save blocked.'}${detailSuffix}`);
+			}
+
 			if (errors.length > 0) {
 				setStatus({
 					type: 'error',
