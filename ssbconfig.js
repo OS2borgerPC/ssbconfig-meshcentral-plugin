@@ -167,6 +167,22 @@ module.exports.ssbconfig = function (parent) {
 
     // Create or reuse device groups before commit so their mesh IDs can be embedded in new imageconfigs.
     const groupSync = await meshcentralService.syncCreatedImageconfigGroups(prepared.domainId, prepared.createdImageconfigs, user);
+
+    if (Array.isArray(groupSync.blocked) && groupSync.blocked.length > 0) {
+      const first = groupSync.blocked[0];
+      const adminUserId = first && first.adminUserId ? first.adminUserId : `user/${prepared.domainId || "default"}/admin`;
+      return {
+        ok: false,
+        branch: prepared.branch,
+        domainId: prepared.domainId,
+        changedFiles: prepared.fileChanges.map((f) => f.path),
+        validationErrors: [],
+        groupSync,
+        error: `Cannot create device groups because required domain admin account ${adminUserId} was not found. Create this account and try again.`,
+        details: groupSync.blocked.map((entry) => String(entry.reason || "Blocked by device-group ownership policy."))
+      };
+    }
+
     const imageIdPatch = configService.applyImageIdMappingsToFileChanges(
       prepared.fileChanges,
       groupSync && groupSync.imageconfigMeshLinks
